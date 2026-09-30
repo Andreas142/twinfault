@@ -1,0 +1,50 @@
+name: Phase 1 - probe AWS data
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Days to read. One day: 2025-06-01. A whole month: 2025-06-*"
+        required: true
+        default: "2025-06-01"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install DuckDB
+        run: pip install -r requirements.txt
+
+      - name: Probe the AWS public Ethereum data
+        env:
+          DATES: ${{ inputs.dates }}
+        run: python scripts/probe_aws.py --dates "$DATES" --out probe_results.md
+
+      - name: Show the results on the run page
+        if: always()
+        run: |
+          if [ -f probe_results.md ]; then
+            cat probe_results.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No results file was written; check the probe step log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Keep the results as a download
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: probe-results
+          path: probe_results.md
+          if-no-files-found: ignore
