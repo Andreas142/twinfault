@@ -1,0 +1,102 @@
+name: Phase 2 - backfill to Hugging Face
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_month:
+        description: "First month, as YYYY-MM"
+        required: true
+        default: "2024-01"
+      end_month:
+        description: "Last month, as YYYY-MM"
+        required: true
+        default: "2026-09"
+
+permissions:
+  contents: read
+
+# Only one backfill at a time.
+concurrency:
+  group: backfill
+  cancel-in-progress: false
+
+env:
+  HF_REPO: andrew142/stablecoin-payments-eth
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      months: ${{ steps.months.outputs.months }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: List the months
+        id: months
+        env:
+          START: ${{ inputs.start_month }}
+          END: ${{ inputs.end_month }}
+        run: echo "months=$(python3 scripts/backfill_tools.py months "$START" "$END")" >> "$GITHUB_OUTPUT"
+
+  month:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        month: ${{ fromJSON(needs.plan.outputs.months) }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract the month
+        env:
+          MONTH: ${{ matrix.month }}
+        run: python scripts/extract_month.py --month "$MONTH" --out-dir data --report report.md --stats stats.json
+
+      - name: Upload to Hugging Face
+        env:
+          MONTH: ${{ matrix.month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/backfill_tools.py upload --month "$MONTH" --data-dir data --report report.md --stats stats.json --repo "$HF_REPO"
+
+      - name: Keep this month's results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stats-${{ matrix.month }}
+          path: stats.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  summary:
+    needs: [plan, month]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Collect every month's results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: stats-*
+          path: stats
+
+      - name: Write the summary
+        env:
+          MONTHS: ${{ needs.plan.outputs.months }}
+        run: |
+          mkdir -p stats
+          python3 scripts/backfill_tools.py summary stats "$MONTHS" >> "$GITHUB_STEP_SUMMARY"
