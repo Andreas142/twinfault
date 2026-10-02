@@ -16,10 +16,12 @@ Markdown report with a size projection for the full history.
 
 Usage:
   python scripts/extract_month.py --month 2025-06 --out-dir data --report extract_results.md
+  python scripts/extract_month.py --month 2025-06 --stats stats.json   # also write results as JSON
 """
 
 import argparse
 import calendar
+import json
 import os
 import re
 import shutil
@@ -107,6 +109,7 @@ def main() -> int:
     parser.add_argument("--base", default=DEFAULT_BASE, help="Where the data lives (default: the public AWS bucket)")
     parser.add_argument("--out-dir", default="data", help="Folder for the Parquet outputs")
     parser.add_argument("--report", default="extract_results.md", help="Markdown report to write")
+    parser.add_argument("--stats", help="Optional JSON file for the counts, sizes and checks")
     args = parser.parse_args()
 
     if not MONTH_PATTERN.match(args.month):
@@ -122,7 +125,7 @@ def main() -> int:
     run = Run(args.base, args.month, args.out_dir)
     free_before = shutil.disk_usage(args.out_dir).free
     addresses = ", ".join(f"'{a}'" for a in STABLECOINS.values())
-    copy_opts = "FORMAT parquet, COMPRESSION zstd, PARTITION_BY (date), OVERWRITE_OR_IGNORE"
+    copy_opts = "FORMAT parquet, COMPRESSION zstd, PARTITION_BY (date), WRITE_PARTITION_COLUMNS true, OVERWRITE_OR_IGNORE"
 
     try:
         tt_cols = run.columns("token_transfers")
@@ -223,6 +226,7 @@ def main() -> int:
                   f"Rough: activity changes month to month.\n")
 
     # 6. Data-quality checks on the outputs -------------------------------------
+    check_results: list = []
     report.append("## Data-quality checks\n")
     if {"stablecoin_transfers", "stablecoin_transactions", "blocks"} <= set(counts):
         tr, tx, bl = (run.local(n) for n in ("stablecoin_transfers", "stablecoin_transactions", "blocks"))
@@ -245,6 +249,7 @@ def main() -> int:
         for label, query, expected in checks:
             try:
                 value = run.sql(f"check: {label}", query)[0][0]
+                check_results.append({"check": label, "result": value, "expected": expected, "passed": value == expected})
                 report.append(f"| {label} | {fmt(value)} | {fmt(expected)} | {'yes' if value == expected else '**no**'} |")
             except Exception as exc:
                 run.errors.append(f"check '{label}': {exc}")
@@ -331,6 +336,18 @@ def main() -> int:
     with open(args.report, "w", encoding="utf-8") as fh:
         fh.write(text)
     print(text)
+
+    if args.stats:
+        stats = {
+            "month": args.month,
+            "outputs": {name: {"rows": counts[name], "bytes": sizes[name]} for name in sizes},
+            "total_bytes": month_total,
+            "checks": check_results,
+            "errors": run.errors,
+            "query_seconds": round(sum(seconds for _, seconds in run.timings), 1),
+        }
+        with open(args.stats, "w", encoding="utf-8") as fh:
+            json.dump(stats, fh, indent=2, default=str)
     return 1 if run.errors else 0
 
 
