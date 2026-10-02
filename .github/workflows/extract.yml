@@ -1,0 +1,54 @@
+name: Phase 1 - extract one month
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to extract, as YYYY-MM"
+        required: true
+        default: "2025-06"
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    # Pinned so results do not change when ubuntu-latest moves to a new release.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install DuckDB
+        run: pip install -r requirements.txt
+
+      - name: Extract the month
+        env:
+          MONTH: ${{ inputs.month }}
+        run: python scripts/extract_month.py --month "$MONTH" --out-dir data --report extract_results.md
+
+      - name: Show the results on the run page
+        if: always()
+        run: |
+          if [ -f extract_results.md ]; then
+            cat extract_results.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No results file was written; check the extract step log." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Keep the report and load manifest as a download
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: extract-results
+          path: |
+            extract_results.md
+            data/load_manifest.parquet
+          if-no-files-found: ignore
+          retention-days: 30
