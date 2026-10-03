@@ -64,13 +64,33 @@ jobs:
       - name: Install dependencies
         run: pip install -r ../requirements.txt
 
+      # Download only this month's files: one listing call instead of one per folder,
+      # which keeps parallel jobs under Hugging Face's request limits.
+      - name: Download the month from Hugging Face
+        env:
+          MONTH: ${{ matrix.month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf download "$HF_REPO" --repo-type dataset --local-dir ../hf_data \
+                --include "stablecoin_transfers/date=$MONTH-*/*" \
+                --include "stablecoin_transactions/date=$MONTH-*/*" \
+                --include "blocks/date=$MONTH-*/*" \
+                --include "load_manifest/month=$MONTH/*"; then
+              exit 0
+            fi
+            echo "Download attempt $attempt failed; retrying"
+            sleep $((60 * attempt))
+          done
+          exit 1
+
       - name: Build and test the month
         env:
           MONTH: ${{ matrix.month }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           mkdir -p output
-          dbt build --vars "{month: '$MONTH'}"
+          dbt build --vars "{month: '$MONTH', data_root: '../hf_data'}"
 
       - name: Upload the marts to Hugging Face
         env:
@@ -119,7 +139,9 @@ jobs:
           END_MONTH: ${{ inputs.end_month }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          dbt source freshness --vars "{month: '$END_MONTH'}"
+          hf download "$HF_REPO" --repo-type dataset --local-dir ../hf_data \
+            --include "load_manifest/month=$END_MONTH/*"
+          dbt source freshness --vars "{month: '$END_MONTH', data_root: '../hf_data'}"
 
       - name: Generate the dbt docs
         if: always()
