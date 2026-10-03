@@ -1,0 +1,14 @@
+twinfault:
+  target: ci
+  outputs:
+    ci:
+      type: duckdb
+      path: twinfault.duckdb
+      threads: 2
+      extensions:
+        - httpfs
+      settings:
+        memory_limit: "12GB"
+      secrets:
+        - type: huggingface
+          token: "{{ env_var('HF_TOKEN', '') }}"
