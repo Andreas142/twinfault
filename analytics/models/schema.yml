@@ -1,0 +1,113 @@
+version: 2
+
+sources:
+  - name: stablecoins
+    description: >
+      The four tables of the public Hugging Face dataset, read directly with DuckDB.
+      Each run reads only the folders of the month being built.
+    config:
+      meta:
+        external_location: "read_parquet('{{ var('data_root') }}/{name}/date={{ var('month') }}-*/*.parquet', hive_partitioning = true)"
+    tables:
+      - name: stablecoin_transfers
+        description: Every USDT, USDC and PYUSD transfer on Ethereum.
+      - name: stablecoin_transactions
+        description: Transactions behind the transfers, plus every direct call to a token contract, including failed ones.
+      - name: blocks
+        description: Every Ethereum block.
+      - name: load_manifest
+        description: One row per source table per day, as the load log recorded it.
+        config:
+          meta:
+            external_location: "read_parquet('{{ var('data_root') }}/load_manifest/month={{ var('month') }}/*.parquet', hive_partitioning = true)"
+          loaded_at_field: last_written
+          freshness:
+            warn_after: {count: 35, period: day}
+            error_after: {count: 62, period: day}
+
+models:
+  - name: stg_transfers
+    description: One row per stablecoin transfer in the month being built.
+    columns:
+      - name: transaction_hash
+        data_tests: [not_null]
+      - name: amount
+        data_tests: [not_null]
+      - name: token
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [USDT, USDC, PYUSD]
+
+  - name: stg_transactions
+    description: One row per transaction that moved a stablecoin or called a token contract.
+    columns:
+      - name: hash
+        data_tests: [unique, not_null]
+      - name: fee_eth
+        description: Fee paid, in ETH (gas used × effective gas price ÷ 10^18).
+
+  - name: stg_blocks
+    description: One row per Ethereum block.
+    columns:
+      - name: block_number
+        data_tests: [unique, not_null]
+
+  - name: stg_load_manifest
+    description: One row per source table per day, from the load log.
+    columns:
+      - name: source_table
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [token_transfers, transactions, blocks]
+
+  - name: fct_daily_payments
+    description: >
+      The daily cube. One row per day, token, amount band and route
+      (direct call to the token contract, or via another contract such as an exchange).
+      Unique counts are approximate and only valid within a row.
+    columns:
+      - name: cube_key
+        data_tests: [unique, not_null]
+      - name: token
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [USDT, USDC, PYUSD]
+      - name: amount_band
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [under 10, 10 to 1k, 1k to 100k, 100k and over]
+      - name: route
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [direct, via contract]
+      - name: transfers
+        data_tests: [not_null]
+
+  - name: fct_daily_token_health
+    description: One row per day and token. Direct calls, failures, failure rate and fees.
+    columns:
+      - name: health_key
+        data_tests: [unique, not_null]
+
+  - name: fct_daily_pipeline
+    description: One row per day. Completeness and load delay, checked before any business explanation.
+    columns:
+      - name: date
+        data_tests: [unique, not_null]
+      - name: missing_blocks
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0]
+                quote: false
+      - name: duplicate_blocks
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [0]
+                quote: false
