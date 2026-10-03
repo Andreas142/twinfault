@@ -134,14 +134,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r ../requirements.txt
 
+      # Freshness is about the newest data, whatever range this run built:
+      # last calendar month's load log should already be on Hugging Face.
       - name: Check that the source data is fresh
         env:
-          END_MONTH: ${{ inputs.end_month }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          LAST_MONTH=$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m)
+          echo "Checking the load log for $LAST_MONTH"
           hf download "$HF_REPO" --repo-type dataset --local-dir ../hf_data \
-            --include "load_manifest/month=$END_MONTH/*"
-          dbt source freshness --vars "{month: '$END_MONTH', data_root: '../hf_data'}"
+            --include "load_manifest/month=$LAST_MONTH/*"
+          dbt source freshness --vars "{month: '$LAST_MONTH', data_root: '../hf_data'}"
 
       - name: Generate the dbt docs
         if: always()
