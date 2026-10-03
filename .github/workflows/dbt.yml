@@ -1,0 +1,138 @@
+name: Phase 3 - build the analytics cube
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_month:
+        description: "First month, as YYYY-MM"
+        required: true
+        default: "2024-01"
+      end_month:
+        description: "Last month, as YYYY-MM"
+        required: true
+        default: "2026-09"
+
+permissions:
+  contents: read
+
+# Only one build at a time.
+concurrency:
+  group: dbt
+  cancel-in-progress: false
+
+env:
+  HF_REPO: andrew142/stablecoin-payments-eth
+  DBT_PROFILES_DIR: .
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      months: ${{ steps.months.outputs.months }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: List the months
+        id: months
+        env:
+          START: ${{ inputs.start_month }}
+          END: ${{ inputs.end_month }}
+        run: echo "months=$(python3 scripts/backfill_tools.py months "$START" "$END")" >> "$GITHUB_OUTPUT"
+
+  month:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        month: ${{ fromJSON(needs.plan.outputs.months) }}
+    defaults:
+      run:
+        working-directory: analytics
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r ../requirements.txt
+
+      - name: Build and test the month
+        env:
+          MONTH: ${{ matrix.month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          mkdir -p output
+          dbt build --vars "{month: '$MONTH'}"
+
+      - name: Upload the marts to Hugging Face
+        env:
+          MONTH: ${{ matrix.month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf upload "$HF_REPO" output marts --repo-type dataset --commit-message "Marts for $MONTH"; then
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed; retrying"
+            sleep $((30 * attempt))
+          done
+          exit 1
+
+      - name: Keep the dbt results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-${{ matrix.month }}
+          path: analytics/target/run_results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  freshness-and-docs:
+    needs: [plan, month]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: analytics
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r ../requirements.txt
+
+      - name: Check that the source data is fresh
+        env:
+          END_MONTH: ${{ inputs.end_month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          dbt source freshness --vars "{month: '$END_MONTH'}"
+
+      - name: Generate the dbt docs
+        if: always()
+        run: dbt docs generate --empty-catalog
+
+      - name: Keep the docs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dbt-docs
+          path: |
+            analytics/target/index.html
+            analytics/target/manifest.json
+            analytics/target/catalog.json
+          if-no-files-found: ignore
+          retention-days: 30
