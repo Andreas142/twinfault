@@ -1,0 +1,25 @@
+name: twinfault
+version: "1.0.0"
+config-version: 2
+profile: twinfault
+
+model-paths: ["models"]
+test-paths: ["tests"]
+target-path: target
+clean-targets: [target, output]
+
+# Each run builds one month. Override on the command line:
+#   dbt build --vars "{month: '2025-06'}"
+vars:
+  month: "2025-06"
+  data_root: "hf://datasets/andrew142/stablecoin-payments-eth"
+  output_root: "output"
+
+models:
+  twinfault:
+    staging:
+      # Read each source once from Hugging Face into the local DuckDB file.
+      +materialized: table
+    marts:
+      # Written as Parquet, one file per month, then uploaded to Hugging Face.
+      +materialized: external
