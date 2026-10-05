@@ -1,0 +1,152 @@
+---
+title: "Data health"
+format: dashboard
+scrolling: true
+---
+
+```{python}
+#| include: false
+import pandas as pd
+import plotly.graph_objects as go
+from IPython.display import HTML
+from twinfault_site import *
+
+p = sql("select * from fct_daily_pipeline order by date")
+first, last = p.date.min(), p.date.max()
+expected_days = (last - first).days + 1
+gaps = int(p.missing_blocks.sum() + p.duplicate_blocks.sum())
+usual_lag = p.max_load_lag_hours.median()
+flags = sql("select * from pipeline_flags")
+late_days = int((flags.pipeline == "Late data").sum())
+tests = dbt_test_count()
+```
+
+## Row {height=190px}
+
+::: {.valuebox icon="calendar-check" color="#e5f5ef"}
+Days covered
+
+`{python} f"{len(p):,}"`
+
+of `{python} f"{expected_days:,}"` expected, `{python} first.strftime("%b %Y")` to `{python} last.strftime("%b %Y")`
+:::
+
+::: {.valuebox icon="boxes" color="#eaf1fc"}
+Missing or duplicate blocks
+
+`{python} f"{gaps:,}"`
+
+across `{python} compact(p.blocks.sum())` blocks checked
+:::
+
+::: {.valuebox icon="clock-history" color="#fff4d6"}
+Days with late data
+
+`{python} f"{late_days:,}"`
+
+slowest row landed over `{python} f"{2 * usual_lag:.0f}"` hours after its block (twice the usual)
+:::
+
+::: {.valuebox icon="check2-circle" color="#efeafc"}
+dbt tests per month
+
+`{python} f"{tests}" if tests else "–"`
+
+every month on this site passed all of them before it was published
+:::
+
+## Row {height=420px}
+
+```{python}
+#| title: Blocks per day (one block every 12 seconds would be 7,200)
+fig = go.Figure()
+fig.add_scatter(x=p.date, y=p.blocks, mode="lines", name="blocks", showlegend=False,
+                line=dict(color="#2f6fd6", width=1.5), hovertemplate="%{y:,} blocks")
+fig.add_hline(y=7200, line=dict(color=MUTED, dash="dot", width=1))
+bad = p[(p.missing_blocks > 0) | (p.duplicate_blocks > 0)]
+fig.add_scatter(x=bad.date, y=bad.blocks, mode="markers", name="gap or duplicate", showlegend=not bad.empty,
+                marker=dict(color="#d1495b", size=9, symbol="x"), hovertemplate="%{x}: check this day<extra></extra>")
+fig.update_yaxes(tickformat=",")
+show(fig)
+```
+
+```{python}
+#| title: Load delay per day (hours from block to file, slowest row, log scale)
+fig = go.Figure()
+fig.add_scatter(x=p.date, y=p.max_load_lag_hours, mode="lines", name="slowest row", showlegend=False,
+                line=dict(color="#7b61c2", width=1.5), hovertemplate="%{y:.1f} h")
+fig.add_scatter(x=[first, last], y=[2 * usual_lag] * 2, mode="lines", name="late-data line (twice the usual)",
+                line=dict(color="#d1495b", dash="dot", width=1), hoverinfo="skip")
+fig.update_yaxes(type="log", tickvals=[1, 2, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000])
+show(fig)
+```
+
+## Row {height=420px}
+
+```{python}
+#| title: Stablecoins' share of all token transfers on Ethereum (7-day average)
+share = (p.set_index("date").stablecoin_transfers.rolling(7, min_periods=1).sum()
+         / p.set_index("date").source_transfer_rows.rolling(7, min_periods=1).sum())
+fig = go.Figure()
+fig.add_scatter(x=share.index, y=share.values, mode="lines", showlegend=False,
+                line=dict(color="#1a9e77", width=2), hovertemplate="%{y:.1%}")
+fig.update_yaxes(tickformat=".0%", rangemode="tozero")
+show(fig)
+```
+
+```{python}
+#| title: Source files per day (all three source tables)
+fig = go.Figure()
+fig.add_scatter(x=p.date, y=p.source_files, mode="lines", line_shape="hv", showlegend=False,
+                line=dict(color="#4f7fcf", width=1.5), hovertemplate="%{y} files")
+fig.update_yaxes(rangemode="tozero", dtick=1 if p.source_files.max() <= 10 else None)
+show(fig)
+```
+
+## Row
+
+```{python}
+#| title: Days to check before explaining any move
+issues = sql("""
+    with t as (select date, sum(transfers) as transfers from fct_daily_payments group by date)
+    select f.date, f.pipeline, p.missing_blocks, p.duplicate_blocks, p.max_load_lag_hours, t.transfers
+    from pipeline_flags as f
+    join fct_daily_pipeline as p using (date)
+    left join t using (date)
+    where f.pipeline <> 'OK'
+    order by f.date desc
+""")
+if issues.empty:
+    out = HTML('<p>No day has missing blocks, duplicate blocks or late data, so no unusual day '
+               'on this site can be put down to these pipeline checks.</p>')
+else:
+    table = pd.DataFrame({
+        "Day": issues.date.dt.strftime("%a %d %b %Y"),
+        "Verdict": issues.pipeline.map(pill),
+        "Missing / duplicate blocks": [f"{m:,} / {d:,}" for m, d in zip(issues.missing_blocks, issues.duplicate_blocks)],
+        "Slowest row": issues.max_load_lag_hours.map("{:.0f} h".format),
+        "Transfers": issues.transfers.map(compact),
+    })
+    out = HTML(html_table(table, numeric=("Missing / duplicate blocks", "Slowest row", "Transfers")))
+out
+```
+
+```{python}
+#| title: What is checked, and where
+HTML(f"""
+<ol>
+<li><b>Extract</b> (monthly, from AWS): seven checks on every month, including continuous block
+numbers, no duplicate blocks, and transfers with no missing amount or address.</li>
+<li><b>dbt</b> (monthly): {tests or "the"} tests per month, including unique keys, accepted values,
+no block gaps and a reconciliation that the daily cube adds up to the raw transfers exactly.
+A month that fails is not uploaded.</li>
+<li><b>Freshness</b>: the load log for last month must be less than 35 days old (warning)
+or 62 days old (error).</li>
+<li><b>This page</b>: a day is <i>late</i> if its slowest row landed more than twice the usual
+delay ({usual_lag:.0f} hours) after its block.</li>
+</ol>
+<p class="note">The source data is AWS Public Blockchain Data, which AWS labels experimental.
+That is why completeness is checked from the data itself: block numbers are sequential,
+so a gap is visible without trusting the loader.</p>
+""")
+```
