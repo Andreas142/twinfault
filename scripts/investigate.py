@@ -30,7 +30,9 @@ import duckdb
 import pandas as pd
 
 HF_REPO = "andrew142/stablecoin-payments-eth"
-ZERO = "0x0000000000000000000000000000000000000000"
+# Transfer addresses come as 32-byte words ('0x' + 24 zeros + the 20-byte address), while
+# transaction addresses are plain 20 bytes. Compare on the last 40 hex characters.
+ZERO40 = "0" * 40
 
 # Windows to search for failure spikes. Inside each, a spike day is one where the
 # token's failure rate is over 3 times its median of the previous 28 days.
@@ -281,6 +283,43 @@ def investigate_failures(con, report: Report, data: Path, offline: bool, case) -
         group by all order by s.token, s.date
     """).df(), limit=80)
 
+    report.table(f"{cid}_known_vs_new", "Failure rate for senders already active on baseline days vs senders never seen before", con.execute("""
+        with known as (select distinct token, sender from senders where not spike_day)
+        select s.date, s.token, s.spike_day,
+               sum(s.calls) filter (where k.sender is not null) as calls_known,
+               round(100.0 * sum(s.failed) filter (where k.sender is not null)
+                     / nullif(sum(s.calls) filter (where k.sender is not null), 0), 3) as pct_failed_known,
+               sum(s.calls) filter (where k.sender is null) as calls_new,
+               round(100.0 * sum(s.failed) filter (where k.sender is null)
+                     / nullif(sum(s.calls) filter (where k.sender is null), 0), 3) as pct_failed_new,
+               round(100.0 * sum(s.failed) filter (where k.sender is null) / nullif(sum(s.failed), 0), 1) as pct_failures_from_new
+        from senders as s left join known as k on k.token = s.token and k.sender = s.sender
+        where s.spike_day or s.date >= (select max(date) from senders where not spike_day) - interval 6 day
+        group by all order by s.token, s.date
+    """).df(), limit=80)
+
+    # A fingerprint: when most spike-day failures used exactly the same gas, one program sent them.
+    report.table(f"{cid}_signature", "Failure rate without the calls that match the spike's gas fingerprint", con.execute("""
+        with modes as (
+            select token, gas_used, count(*) as n,
+                   count(*) / sum(count(*)) over (partition by token) as share
+            from tx where spike_day and not succeeded group by token, gas_used
+        ),
+        fingerprint as (
+            select token, gas_used as fingerprint_gas, round(100 * share, 1) as pct_of_spike_failures
+            from (select *, row_number() over (partition by token order by n desc) as rk from modes)
+            where rk = 1 and share >= 0.5
+        )
+        select t.date, t.token, t.spike_day, f.fingerprint_gas, f.pct_of_spike_failures,
+               count(*) filter (where t.gas_used = f.fingerprint_gas) as calls_with_fingerprint,
+               count(distinct t.sender) filter (where t.gas_used = f.fingerprint_gas) as senders_with_fingerprint,
+               round(100.0 * count(*) filter (where not t.succeeded) / count(*), 3) as pct_failed,
+               round(100.0 * count(*) filter (where not t.succeeded and t.gas_used <> f.fingerprint_gas)
+                     / nullif(count(*) filter (where t.gas_used <> f.fingerprint_gas), 0), 3) as pct_failed_without_fingerprint
+        from tx as t join fingerprint as f using (token)
+        group by all order by t.token, t.date
+    """).df(), limit=80)
+
     report.table(f"{cid}_failed_gas_modes", "Most common gas used by failed calls (a fixed value suggests a fixed gas limit)", con.execute("""
         select * from (
             select token, spike_day, gas_used, count(*) as failed_calls,
@@ -352,19 +391,19 @@ def investigate_outliers(con, report: Report, data: Path, offline: bool) -> None
 
     report.table("outlier_mint_burn", "Mints (from the zero address) and burns (to it) over 1 million tokens", con.execute(f"""
         select block_timestamp, block_number, token,
-               case when from_address = '{ZERO}' then 'mint' else 'burn' end as kind,
+               case when right(from_address, 40) = '{ZERO40}' then 'mint' else 'burn' end as kind,
                amount, transaction_hash,
-               case when from_address = '{ZERO}' then to_address else from_address end as counterparty
+               '0x' || right(case when right(from_address, 40) = '{ZERO40}' then to_address else from_address end, 40) as counterparty
         from transfers_out
-        where ({pairs}) and (from_address = '{ZERO}' or to_address = '{ZERO}') and amount >= 1e6
+        where ({pairs}) and (right(from_address, 40) = '{ZERO40}' or right(to_address, 40) = '{ZERO40}') and amount >= 1e6
         order by block_timestamp, block_number
     """).df())
 
     report.table("outlier_summary", "What the day's value moved is made of", con.execute(f"""
         select date, token, count(*) as transfers, sum(amount) as value_moved,
-               sum(amount) filter (where from_address = '{ZERO}') as minted,
-               sum(amount) filter (where to_address = '{ZERO}') as burned,
-               sum(amount) filter (where from_address <> '{ZERO}' and to_address <> '{ZERO}') as moved_between_holders,
+               sum(amount) filter (where right(from_address, 40) = '{ZERO40}') as minted,
+               sum(amount) filter (where right(to_address, 40) = '{ZERO40}') as burned,
+               sum(amount) filter (where right(from_address, 40) <> '{ZERO40}' and right(to_address, 40) <> '{ZERO40}') as moved_between_holders,
                max(amount) as largest_transfer
         from transfers_out where {pairs}
         group by all order by date
@@ -372,7 +411,8 @@ def investigate_outliers(con, report: Report, data: Path, offline: bool) -> None
 
     report.table("outlier_largest", "The 10 largest transfers on each outlier day", con.execute(f"""
         select * from (
-            select date, token, block_timestamp, amount, from_address, to_address, transaction_hash,
+            select date, token, block_timestamp, amount,
+                   '0x' || right(from_address, 40) as from_address, '0x' || right(to_address, 40) as to_address, transaction_hash,
                    row_number() over (partition by date, token order by amount desc) as rank
             from transfers_out where {pairs}
         ) where rank <= 10 order by date, token, rank
