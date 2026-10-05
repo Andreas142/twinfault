@@ -14,13 +14,16 @@ from twinfault_site import *
 month = last_full_month()
 prev = (pd.Timestamp(month + "-01") - pd.DateOffset(months=1)).strftime("%Y-%m")
 m = sql(f"""
-    select month,
-           sum(transfers) as transfers,
-           sum(volume) as volume,
-           sum(transfers) filter (where route = 'via contract') / sum(transfers) as via_share
-    from fct_daily_payments
-    where month in ('{month}', '{prev}')
-    group by month
+    with t as (
+        select month, sum(transfers) as transfers,
+               sum(transfers) filter (where route = 'via contract') / sum(transfers) as via_share
+        from fct_daily_payments where month in ('{month}', '{prev}') group by month
+    ),
+    v as (
+        select month, sum(volume) as volume
+        from payments_value where month in ('{month}', '{prev}') group by month
+    )
+    select * from t join v using (month)
 """).set_index("month")
 cur, old = m.loc[month], m.loc[prev]
 since = f"vs {month_label(prev)}"
@@ -71,10 +74,10 @@ show(fig)
 ```
 
 ```{python}
-#| title: Monthly value moved, by transfer size
+#| title: Monthly value moved, by transfer size (outlier days left out, listed below)
 bands = sql("""
     select month, amount_band, amount_band_order, sum(volume) as volume
-    from fct_daily_payments group by all order by month, amount_band_order
+    from payments_value group by all order by month, amount_band_order
 """)
 div, unit = money_unit(bands.groupby("month").volume.sum().max())
 fig = go.Figure()
@@ -112,7 +115,7 @@ mix = sql(f"""
     select amount_band, amount_band_order,
            sum(transfers) / sum(sum(transfers)) over () as count_share,
            sum(volume) / sum(sum(volume)) over () as value_share
-    from fct_daily_payments where month = '{month}'
+    from payments_value where month = '{month}'
     group by all order by amount_band_order
 """)
 fig = go.Figure()
@@ -132,10 +135,14 @@ show(fig)
 ```{python}
 #| title: Monthly summary, last 12 months
 table = sql("""
-    select month, token, sum(transfers) as transfers, sum(volume) as volume
-    from fct_daily_payments
+    with t as (
+        select month, token, sum(transfers) as transfers from fct_daily_payments group by all
+    ),
+    v as (
+        select month, token, sum(volume) as volume from payments_value group by all
+    )
+    select * from t left join v using (month, token)
     where month > (select strftime(max(date) - interval 12 month, '%Y-%m') from fct_daily_payments)
-    group by all
 """)
 wide = table.pivot(index="month", columns="token", values=["transfers", "volume"]).sort_index(ascending=False)
 out = pd.DataFrame({"Month": [month_label(m_) for m_ in wide.index]})
@@ -144,4 +151,29 @@ for t in TOKENS:
 for t in TOKENS:
     out[f"{t} value"] = [compact(v, "$") if pd.notna(v) else "–" for v in wide[("volume", t)]]
 HTML(html_table(out, numeric=tuple(out.columns[1:])))
+```
+
+## Row {height=250px}
+
+```{python}
+#| title: Days left out of the value figures
+outliers = value_outliers()
+if outliers.empty:
+    out = HTML("<p>No day has a token's value moved above 1,000 times its median day, "
+               "so nothing is left out.</p>")
+else:
+    reasons = [f'{r} (<a href="{u}" target="_blank">source</a>)' if r else "Not explained yet"
+               for r, u in zip(outliers.reason, outliers.source)]
+    table = pd.DataFrame({
+        "Day": outliers.date.dt.strftime("%a %d %b %Y"),
+        "Token": outliers.token,
+        "Value moved": [compact(v, "$") for v in outliers.volume],
+        "Times a median day": [f"{x:,.0f}×" for x in outliers.times_usual],
+        "What happened": reasons,
+    })
+    out = HTML('<p class="note">A token-day is left out when its value moved is over 1,000 times '
+               "that token's median day. Transfer counts still include it; only value figures "
+               "on this page leave it out.</p>"
+               + html_table(table, numeric=("Value moved", "Times a median day")))
+out
 ```
