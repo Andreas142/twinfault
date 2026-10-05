@@ -1,0 +1,44 @@
+name: Phase 3c - investigate the unusual days
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  investigate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Investigate and upload the results to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/investigate.py --out investigations --upload
+
+      - name: Show the report on this page
+        if: always()
+        run: |
+          if [ -f investigations/report.md ]; then
+            cat investigations/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: investigations
+          path: investigations/
+          if-no-files-found: ignore
+          retention-days: 30
