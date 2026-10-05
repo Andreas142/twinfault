@@ -17,7 +17,7 @@ expected_days = (last - first).days + 1
 gaps = int(p.missing_blocks.sum() + p.duplicate_blocks.sum())
 usual_lag = p.max_load_lag_hours.median()
 flags = sql("select * from pipeline_flags")
-late_days = int((flags.pipeline == "Late data").sum())
+late_days = int((flags.pipeline == "Late or rewritten").sum())
 tests = dbt_test_count()
 ```
 
@@ -40,11 +40,11 @@ across `{python} compact(p.blocks.sum())` blocks checked
 :::
 
 ::: {.valuebox icon="clock-history" color="#fff4d6"}
-Days with late data
+Days late or rewritten
 
 `{python} f"{late_days:,}"`
 
-slowest row landed over `{python} f"{2 * usual_lag:.0f}"` hours after its block (twice the usual)
+slowest row written over `{python} f"{2 * usual_lag:.0f}"` hours after its block (twice the usual)
 :::
 
 ::: {.valuebox icon="check2-circle" color="#efeafc"}
@@ -75,7 +75,7 @@ show(fig)
 fig = go.Figure()
 fig.add_scatter(x=p.date, y=p.max_load_lag_hours, mode="lines", name="slowest row", showlegend=False,
                 line=dict(color="#7b61c2", width=1.5), hovertemplate="%{y:.1f} h")
-fig.add_scatter(x=[first, last], y=[2 * usual_lag] * 2, mode="lines", name="late-data line (twice the usual)",
+fig.add_scatter(x=[first, last], y=[2 * usual_lag] * 2, mode="lines", name="late or rewritten (twice the usual)",
                 line=dict(color="#d1495b", dash="dot", width=1), hoverinfo="skip")
 fig.update_yaxes(type="log", tickvals=[1, 2, 3, 5, 10, 20, 30, 50, 100, 200, 300, 500, 1000, 2000, 5000])
 show(fig)
@@ -114,20 +114,23 @@ issues = sql("""
     join fct_daily_pipeline as p using (date)
     left join t using (date)
     where f.pipeline <> 'OK'
-    order by f.date desc
+    order by f.pipeline = 'Late or rewritten', p.max_load_lag_hours desc
 """)
+shown = issues.head(15)
 if issues.empty:
-    out = HTML('<p>No day has missing blocks, duplicate blocks or late data, so no unusual day '
-               'on this site can be put down to these pipeline checks.</p>')
+    out = HTML('<p>No day has missing blocks, duplicate blocks or late or rewritten data, so no '
+               'unusual day on this site can be put down to these pipeline checks.</p>')
 else:
     table = pd.DataFrame({
-        "Day": issues.date.dt.strftime("%a %d %b %Y"),
-        "Verdict": issues.pipeline.map(pill),
-        "Missing / duplicate blocks": [f"{m:,} / {d:,}" for m, d in zip(issues.missing_blocks, issues.duplicate_blocks)],
-        "Slowest row": issues.max_load_lag_hours.map("{:.0f} h".format),
-        "Transfers": issues.transfers.map(compact),
+        "Day": shown.date.dt.strftime("%a %d %b %Y"),
+        "Verdict": shown.pipeline.map(pill),
+        "Missing / duplicate blocks": [f"{m:,} / {d:,}" for m, d in zip(shown.missing_blocks, shown.duplicate_blocks)],
+        "Slowest row": shown.max_load_lag_hours.map("{:,.0f} h".format),
+        "Transfers": shown.transfers.map(compact),
     })
-    out = HTML(html_table(table, numeric=("Missing / duplicate blocks", "Slowest row", "Transfers")))
+    more = (f'<p class="note">{len(issues):,} days in total; the {len(shown)} shown are '
+            'block problems first, then the longest delays.</p>') if len(issues) > len(shown) else ""
+    out = HTML(html_table(table, numeric=("Missing / duplicate blocks", "Slowest row", "Transfers")) + more)
 out
 ```
 
@@ -142,8 +145,10 @@ no block gaps and a reconciliation that the daily cube adds up to the raw transf
 A month that fails is not uploaded.</li>
 <li><b>Freshness</b>: the load log for last month must be less than 35 days old (warning)
 or 62 days old (error).</li>
-<li><b>This page</b>: a day is <i>late</i> if its slowest row landed more than twice the usual
-delay ({usual_lag:.0f} hours) after its block.</li>
+<li><b>This page</b>: a day is <i>late or rewritten</i> if its slowest row was written more than
+twice the usual delay ({usual_lag:.0f} hours) after its block. Either the data arrived late, or the
+source rewrote that day afterwards; both mean the day's numbers may have changed after they were
+first published.</li>
 </ol>
 <p class="note">The source data is AWS Public Blockchain Data, which AWS labels experimental.
 That is why completeness is checked from the data itself: block numbers are sequential,
