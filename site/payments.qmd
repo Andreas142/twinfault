@@ -1,0 +1,147 @@
+---
+title: "Payments"
+format: dashboard
+scrolling: true
+---
+
+```{python}
+#| include: false
+import pandas as pd
+import plotly.graph_objects as go
+from IPython.display import HTML
+from twinfault_site import *
+
+month = last_full_month()
+prev = (pd.Timestamp(month + "-01") - pd.DateOffset(months=1)).strftime("%Y-%m")
+m = sql(f"""
+    select month,
+           sum(transfers) as transfers,
+           sum(volume) as volume,
+           sum(transfers) filter (where route = 'via contract') / sum(transfers) as via_share
+    from fct_daily_payments
+    where month in ('{month}', '{prev}')
+    group by month
+""").set_index("month")
+cur, old = m.loc[month], m.loc[prev]
+since = f"vs {month_label(prev)}"
+```
+
+## Row {height=190px}
+
+::: {.valuebox icon="arrow-left-right" color="#eaf1fc"}
+Transfers in `{python} month_label(month)`
+
+`{python} compact(cur.transfers)`
+
+`{python} change(cur.transfers, old.transfers)` `{python} since`
+:::
+
+::: {.valuebox icon="cash-stack" color="#e5f5ef"}
+Value moved in `{python} month_label(month)`
+
+`{python} compact(cur.volume, "$")`
+
+`{python} change(cur.volume, old.volume)` `{python} since`
+:::
+
+::: {.valuebox icon="diagram-3" color="#fff1e2"}
+Moved inside another contract
+
+`{python} f"{cur.via_share:.0%}"`
+
+of transfers, such as swaps, smart wallets and bridges
+:::
+
+## Row {height=420px}
+
+```{python}
+#| title: Daily transfers by token (7-day average)
+daily = sql("""
+    select date, token, sum(transfers) as transfers
+    from fct_daily_payments group by all order by date
+""")
+fig = go.Figure()
+for token in TOKENS:
+    d = daily[daily.token == token].set_index("date").transfers.rolling(7, min_periods=1).mean()
+    fig.add_scatter(x=d.index, y=d.values, name=token, mode="lines",
+                    line=dict(color=TOKEN_COLORS[token], width=2),
+                    hovertemplate="%{y:,.0f}")
+fig.update_yaxes(tickformat="~s")
+show(fig)
+```
+
+```{python}
+#| title: Monthly value moved, by transfer size
+bands = sql("""
+    select month, amount_band, amount_band_order, sum(volume) as volume
+    from fct_daily_payments group by all order by month, amount_band_order
+""")
+div, unit = money_unit(bands.groupby("month").volume.sum().max())
+fig = go.Figure()
+for band, color in zip(BANDS, BAND_COLORS):
+    d = bands[bands.amount_band == band]
+    fig.add_bar(x=d.month, y=d.volume / div, name=band, marker_color=color,
+                hovertemplate="$%{y:,.2f}" + unit)
+fig.update_layout(barmode="stack", bargap=0.15)
+fig.update_yaxes(tickprefix="$", ticksuffix=unit, tickformat=",~r")
+show(fig)
+```
+
+## Row {height=380px}
+
+```{python}
+#| title: Share of transfers moved inside another contract
+via = sql("""
+    select month, token,
+           sum(transfers) filter (where route = 'via contract') / sum(transfers) as via_share
+    from fct_daily_payments group by all order by month
+""")
+fig = go.Figure()
+for token in TOKENS:
+    d = via[via.token == token]
+    fig.add_scatter(x=d.month, y=d.via_share, name=token, mode="lines+markers",
+                    line=dict(color=TOKEN_COLORS[token], width=2), marker=dict(size=4),
+                    hovertemplate="%{y:.1%}")
+fig.update_yaxes(tickformat=".0%", rangemode="tozero")
+show(fig)
+```
+
+```{python}
+#| title: Share of transfers vs share of value, by size (last full month)
+mix = sql(f"""
+    select amount_band, amount_band_order,
+           sum(transfers) / sum(sum(transfers)) over () as count_share,
+           sum(volume) / sum(sum(volume)) over () as value_share
+    from fct_daily_payments where month = '{month}'
+    group by all order by amount_band_order
+""")
+fig = go.Figure()
+for col, label in (("count_share", "Share of transfers"), ("value_share", "Share of value")):
+    fig.add_bar(y=mix.amount_band, x=mix[col], name=label, orientation="h",
+                marker_color="#8fb0e3" if col == "count_share" else "#1d3f8f",
+                text=[f"{v:.0%}" for v in mix[col]], textposition="outside",
+                hovertemplate="%{x:.1%}")
+fig.update_layout(barmode="group", hovermode="y unified", bargap=0.25)
+fig.update_xaxes(tickformat=".0%", range=[0, 1.12], showgrid=True, gridcolor=GRID)
+fig.update_yaxes(autorange="reversed", tickfont=dict(color=INK))
+show(fig)
+```
+
+## Row
+
+```{python}
+#| title: Monthly summary, last 12 months
+table = sql("""
+    select month, token, sum(transfers) as transfers, sum(volume) as volume
+    from fct_daily_payments
+    where month > (select strftime(max(date) - interval 12 month, '%Y-%m') from fct_daily_payments)
+    group by all
+""")
+wide = table.pivot(index="month", columns="token", values=["transfers", "volume"]).sort_index(ascending=False)
+out = pd.DataFrame({"Month": [month_label(m_) for m_ in wide.index]})
+for t in TOKENS:
+    out[f"{t} transfers"] = [compact(v) if pd.notna(v) else "–" for v in wide[("transfers", t)]]
+for t in TOKENS:
+    out[f"{t} value"] = [compact(v, "$") if pd.notna(v) else "–" for v in wide[("volume", t)]]
+HTML(html_table(out, numeric=tuple(out.columns[1:])))
+```
