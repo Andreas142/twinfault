@@ -101,6 +101,18 @@ Every scenario comes as a pair of twins that move the headline metric the same w
 
 Blockchain data suits this unusually well: block numbers are sequential and transaction hashes are unique, so completeness and duplicates can be checked from the data itself.
 
+```{python}
+#| output: asis
+known = value_outliers().dropna(subset=["reason"])
+if not known.empty:
+    k = known.iloc[0]
+    print(f"""<div class="real-twin"><p><b>A real twin, found in this data.</b>
+On {k.date:%d %B %Y}, {k.token} value moved was {compact(k.volume, "$")}, about
+{compact(k.times_usual)} times its median day. On a dashboard that looks exactly like a decimals bug.
+It wasn't one. {k.reason} (<a href="{k.source}" target="_blank">source</a>). The data was right.
+Telling cases like this apart, before anyone explains them, is what twinfault tests.</p></div>""")
+```
+
 ## Live now
 
 ```{=html}
