@@ -110,26 +110,42 @@ def md_table(df: pd.DataFrame, limit: int = 40) -> str:
 
 
 class Report:
+    """The whole report in report.md, and each section in report_<section>.md (short enough to read online)."""
+
     def __init__(self, out: Path, con):
         self.out = out
         self.con = con
         self.parts = ["# Investigations\n",
                       f"Generated {dt.datetime.now(dt.timezone.utc):%Y-%m-%d %H:%M} UTC "
                       f"from the Hugging Face dataset `{HF_REPO}`.\n"]
+        self.sections: dict[str, list[str]] = {}
+        self.current: str | None = None
+
+    def section(self, key: str, title: str) -> None:
+        self.current = key
+        self.sections[key] = [f"## {title}\n"]
+        self.parts.append(f"## {title}\n")
 
     def text(self, s: str) -> None:
         self.parts.append(s.strip() + "\n")
+        if self.current:
+            self.sections[self.current].append(s.strip() + "\n")
 
     def table(self, name: str, title: str, df: pd.DataFrame, limit: int = 40) -> pd.DataFrame:
         self.con.register("_table", df)
         self.con.execute(f"copy _table to '{(self.out / f'{name}.parquet').as_posix()}' (format parquet)")
         self.con.unregister("_table")
         body = md_table(df, limit) if limit else f"_{len(df):,} rows, saved for the website._\n"
-        self.parts.append(f"### {title}\n\n`{name}`\n\n{body}")
+        block = f"### {title}\n\n`{name}`\n\n{body}"
+        self.parts.append(block)
+        if self.current:
+            self.sections[self.current].append(block)
         return df
 
     def save(self) -> None:
         (self.out / "report.md").write_text("\n".join(self.parts))
+        for key, parts in self.sections.items():
+            (self.out / f"report_{key}.md").write_text("\n".join(parts))
 
 
 # ------------------------------------------------------------------ 1. failure spikes
@@ -154,7 +170,7 @@ def spike_days(con, case) -> pd.DataFrame:
 
 def investigate_failures(con, report: Report, data: Path, offline: bool, case) -> None:
     cid = case["id"]
-    report.text(f"## {case['title']}")
+    report.section(cid, case["title"])
     spikes = report.table(f"{cid}_spike_days", "Spike days (failure rate over 3 times its 28-day median)",
                           spike_days(con, case))
     if spikes.empty:
@@ -165,10 +181,29 @@ def investigate_failures(con, report: Report, data: Path, offline: bool, case) -
     first = spike_dates[0]
     baseline = [first - dt.timedelta(days=i) for i in range(BASELINE_DAYS, 0, -1)]
     days = baseline + spike_dates
+    tokens = ", ".join(f"'{t}'" for t in case["tokens"])
+
+    report.table(f"{cid}_context", "Daily context from the marts: failures, small transfers and the network fee", con.execute(f"""
+        with p as (
+            select date, token, sum(transfers) as transfers,
+                   sum(transfers) filter (where amount_band = 'under 10') as transfers_under_10
+            from payments group by all
+        )
+        select h.date, h.token, h.direct_calls, h.failed_calls,
+               round(100 * h.failure_rate, 3) as pct_failed,
+               p.transfers, p.transfers_under_10,
+               round(100.0 * p.transfers_under_10 / p.transfers, 1) as pct_transfers_under_10,
+               round(pl.avg_base_fee_gwei, 3) as avg_base_fee_gwei
+        from health as h
+        left join p using (date, token)
+        left join pipeline as pl using (date)
+        where h.token in ({tokens})
+          and h.date between date '{first}' - interval {BASELINE_DAYS} day and date '{case["end"]}'
+        order by h.token, h.date
+    """).df(), limit=80)
     fetch(data, day_patterns("stablecoin_transactions", days), offline)
     view(con, "tx_all", data, "stablecoin_transactions", days)
 
-    tokens = ", ".join(f"'{t}'" for t in case["tokens"])
     spike_list = ", ".join(f"date '{d}'" for d in spike_dates)
     con.execute(f"""
         create or replace temp table tx as
@@ -219,7 +254,42 @@ def investigate_failures(con, report: Report, data: Path, offline: bool, case) -
                round(100.0 * sum(failed) filter (where rank > 10) / sum(calls) filter (where rank > 10), 3) as pct_failed_without_top_10,
                count(*) filter (where failed > 0) as failing_senders
         from ranked group by all order by token, date
+    """).df(), limit=60)
+
+    report.table(f"{cid}_always_failing", "Senders that almost always fail (5+ calls, 90%+ failed) vs everyone else", con.execute("""
+        with s as (select *, calls >= 5 and failed >= 0.9 * calls as always_fails from senders)
+        select date, token, spike_day,
+               count(*) filter (where always_fails) as always_failing_senders,
+               coalesce(sum(failed) filter (where always_fails), 0) as their_failed_calls,
+               round(100.0 * coalesce(sum(failed) filter (where always_fails), 0) / nullif(sum(failed), 0), 1) as pct_failures_from_them,
+               round(100.0 * sum(failed) filter (where not always_fails) / sum(calls) filter (where not always_fails), 3) as pct_failed_everyone_else
+        from s group by all order by token, date
     """).df(), limit=80)
+
+    report.table(f"{cid}_sender_profile", "The failing senders: new or known, one call or many, did they also succeed", con.execute("""
+        with known as (select distinct token, sender from senders where not spike_day)
+        select s.date, s.token, s.spike_day,
+               count(*) filter (where s.failed > 0) as failing_senders,
+               round(100.0 * count(*) filter (where s.failed > 0 and k.sender is null)
+                     / nullif(count(*) filter (where s.failed > 0), 0), 1) as pct_not_seen_on_baseline_days,
+               round(100.0 * count(*) filter (where s.failed > 0 and s.calls = 1)
+                     / nullif(count(*) filter (where s.failed > 0), 0), 1) as pct_with_a_single_call,
+               round(100.0 * count(*) filter (where s.failed > 0 and s.failed < s.calls)
+                     / nullif(count(*) filter (where s.failed > 0), 0), 1) as pct_that_also_succeeded,
+               median(s.calls) filter (where s.failed > 0) as median_calls_per_failing_sender
+        from senders as s left join known as k on k.token = s.token and k.sender = s.sender
+        group by all order by s.token, s.date
+    """).df(), limit=80)
+
+    report.table(f"{cid}_failed_gas_modes", "Most common gas used by failed calls (a fixed value suggests a fixed gas limit)", con.execute("""
+        select * from (
+            select token, spike_day, gas_used, count(*) as failed_calls,
+                   round(100.0 * count(*) / sum(count(*)) over (partition by token, spike_day), 1) as pct_of_failed,
+                   row_number() over (partition by token, spike_day order by count(*) desc) as rank
+            from tx where not succeeded group by token, spike_day, gas_used
+        ) where rank <= 5
+        order by token, spike_day, failed_calls desc
+    """).df())
 
     report.table(f"{cid}_top_senders", "Top 5 failing senders on each spike day", con.execute("""
         select date, token, rank, sender, calls, failed,
@@ -249,7 +319,7 @@ def investigate_failures(con, report: Report, data: Path, offline: bool, case) -
         select date, token, hour(block_timestamp) as hour_utc, count(*) as calls,
                count(*) filter (where not succeeded) as failed
         from tx where spike_day group by all order by date, token, hour_utc
-    """).df(), limit=150)
+    """).df(), limit=48)
 
     report.table(f"{cid}_gas", "Gas used and price, failed vs succeeded", con.execute("""
         select token, spike_day, succeeded, count(*) as calls,
@@ -263,7 +333,7 @@ def investigate_failures(con, report: Report, data: Path, offline: bool, case) -
 # ------------------------------------------------------------------ 2. value outliers
 
 def investigate_outliers(con, report: Report, data: Path, offline: bool) -> None:
-    report.text("## Days with an absurd value moved")
+    report.section("outliers", "Days with an absurd value moved")
     outliers = report.table("outlier_days", f"Token-days with value moved over {OUTLIER_FACTOR:,} times the token's median day",
                             con.execute(f"""
         with daily as (select date, token, sum(volume) as volume from payments group by all)
@@ -312,7 +382,7 @@ def investigate_outliers(con, report: Report, data: Path, offline: bool) -> None
 # ------------------------------------------------------------------ 3. rewritten days
 
 def investigate_rewrites(con, report: Report, data: Path, offline: bool) -> None:
-    report.text("## Days the source rewrote later")
+    report.section("rewrites", "Days the source rewrote later")
     days = report.table("rewrite_days", "Each source table, each day: when it was first and last written", con.execute("""
         with m as (
             select source_table, date, rows, files,
@@ -340,7 +410,7 @@ def investigate_rewrites(con, report: Report, data: Path, offline: bool) -> None
     """).df())
 
     flagged = days[(days.source_table == "token_transfers") & (days.pattern != "normal")]
-    report.table("rewrite_flagged", "Token-transfer days that were late or patched", flagged.drop(columns=["source_table"]), limit=80)
+    report.table("rewrite_flagged", "Token-transfer days that were late or patched", flagged.drop(columns=["source_table"]), limit=70)
     if flagged.empty:
         return
 
