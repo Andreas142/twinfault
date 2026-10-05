@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
@@ -36,7 +37,8 @@ for _name in ("fct_daily_payments", "fct_daily_token_health", "fct_daily_pipelin
     )
 
 # One verdict per day: is the data itself in doubt?
-# "Late" means the slowest row landed more than twice the usual delay after its block.
+# "Late or rewritten" means the slowest row was written more than twice the usual
+# delay after its block: it arrived late, or the source rewrote that day later.
 _con.execute("""
     create view pipeline_flags as
     select date,
@@ -44,11 +46,38 @@ _con.execute("""
                when missing_blocks > 0 then 'Missing blocks'
                when duplicate_blocks > 0 then 'Duplicate blocks'
                when max_load_lag_hours > 2 * (select median(max_load_lag_hours) from fct_daily_pipeline)
-                   then 'Late data'
+                   then 'Late or rewritten'
                else 'OK'
            end as pipeline
     from fct_daily_pipeline
 """)
+
+# Token-days whose value moved is over 1,000 times that token's median day.
+# They are left out of value figures and listed on the site, with the reason if known.
+_con.execute("""
+    create view value_outliers as
+    with daily as (
+        select date, token, sum(volume) as volume
+        from fct_daily_payments group by all
+    )
+    select date, token, volume,
+           volume / median(volume) over (partition by token) as times_usual
+    from daily
+    qualify volume > 1000 * median(volume) over (partition by token)
+""")
+_con.execute("""
+    create view payments_value as
+    select p.* from fct_daily_payments as p
+    anti join value_outliers as o using (date, token)
+""")
+
+# Real events behind outliers, with a source. Checked by hand.
+KNOWN_EVENTS = {
+    ("PYUSD", "2025-10-15"): (
+        "Paxos minted 300 trillion PYUSD by mistake and burned it within about 30 minutes",
+        "https://www.theblock.co/post/374870/paxos-mistakenly-mints-300-trillion",
+    ),
+}
 
 
 def sql(query: str) -> pd.DataFrame:
@@ -103,6 +132,15 @@ def unusual_days(source: str, metric: str, segment: str = "token", limit: int = 
     """)
 
 
+def value_outliers() -> pd.DataFrame:
+    """Outlier token-days, with the known reason and source where there is one."""
+    df = sql("select * from value_outliers order by date")
+    keys = list(zip(df.token, df.date.dt.strftime("%Y-%m-%d")))
+    df["reason"] = [KNOWN_EVENTS.get(k, (None, None))[0] for k in keys]
+    df["source"] = [KNOWN_EVENTS.get(k, (None, None))[1] for k in keys]
+    return df
+
+
 def dbt_test_count() -> int | None:
     """Number of dbt tests every month passed before it was published."""
     if not MANIFEST.exists():
@@ -127,6 +165,11 @@ def compact(n: float, prefix: str = "") -> str:
     return f"{prefix}{n:,.0f}"
 
 
+def small(x: float) -> str:
+    """0.0000193 -> '0.000019': two significant digits, never scientific notation."""
+    return np.format_float_positional(x, precision=2, unique=False, fractional=False, trim="-")
+
+
 def change(new: float, old: float) -> str:
     """Percent change as text, such as '+3.2%'."""
     if not old:
@@ -141,7 +184,7 @@ def money_unit(largest: float) -> tuple[float, str]:
 
 def pill(status: str) -> str:
     """A coloured label for a pipeline verdict."""
-    kind = {"OK": "ok", "Late data": "warn"}.get(status, "bad")
+    kind = {"OK": "ok", "Late or rewritten": "warn"}.get(status, "bad")
     return f'<span class="pill pill-{kind}">{status}</span>'
 
 
