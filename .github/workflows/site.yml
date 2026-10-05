@@ -1,0 +1,110 @@
+name: Phase 3b - publish the website
+
+on:
+  workflow_dispatch:
+  # Rebuild the site whenever the analytics cube has been rebuilt.
+  workflow_run:
+    workflows: ["Phase 3 - build the analytics cube"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer run waits instead of cancelling.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  HF_REPO: andrew142/stablecoin-payments-eth
+  DBT_PROFILES_DIR: .
+
+jobs:
+  build:
+    # After a cube build, publish only if that build succeeded.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Download the marts from Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data --include "marts/*"; then
+              exit 0
+            fi
+            echo "Download attempt $attempt failed; retrying"
+            sleep $((60 * attempt))
+          done
+          exit 1
+
+      # dbt docs show column types only for tables that exist, so build the models
+      # on one day of real data first. The marts this writes are not uploaded.
+      - name: Download one day of source data for the dbt docs
+        id: day
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          MONTH=$(ls hf_data/marts/fct_daily_pipeline | sort | tail -1 | cut -d= -f2)
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+          echo "Using $MONTH-01"
+          hf download "$HF_REPO" --repo-type dataset --local-dir hf_data \
+            --include "stablecoin_transfers/date=$MONTH-01/*" \
+            --include "stablecoin_transactions/date=$MONTH-01/*" \
+            --include "blocks/date=$MONTH-01/*" \
+            --include "load_manifest/month=$MONTH/*"
+
+      - name: Build the dbt docs
+        working-directory: analytics
+        env:
+          MONTH: ${{ steps.day.outputs.month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          mkdir -p output
+          if dbt run --vars "{month: '$MONTH', data_root: '../hf_data'}"; then
+            dbt docs generate --static --vars "{month: '$MONTH', data_root: '../hf_data'}"
+          else
+            echo "::warning::The one-day dbt run failed, so the docs will have no column types"
+            dbt docs generate --static --empty-catalog
+          fi
+          mkdir -p ../site/dbt
+          cp target/static_index.html ../site/dbt/index.html
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: 1.10.18
+
+      - name: Render the site
+        working-directory: site
+        run: quarto render
+
+      - name: Package the site for GitHub Pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
