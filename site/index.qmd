@@ -1,0 +1,147 @@
+---
+pagetitle: "twinfault · Is it the business or the pipeline?"
+---
+
+```{python}
+#| include: false
+import plotly.graph_objects as go
+from twinfault_site import *
+
+totals = sql("""
+    select sum(transfers) as transfers, min(date) as first_day, max(date) as last_day,
+           count(distinct date) as days, count(distinct month) as months
+    from fct_daily_payments
+""").iloc[0]
+pipe = sql("""
+    select sum(blocks) as blocks, sum(missing_blocks) + sum(duplicate_blocks) as gaps
+    from fct_daily_pipeline
+""").iloc[0]
+tests = dbt_test_count()
+span = f"{totals.first_day:%b %Y} to {totals.last_day:%b %Y}"
+months = int(totals.months)
+blocks_note = "Ethereum blocks, none missing or duplicated" if pipe.gaps == 0 else "Ethereum blocks checked for gaps"
+tests_value = str(tests) if tests else "dbt"
+tests_note = "dbt tests passed by every month" if tests else "tests on every month"
+```
+
+::: {.hero .column-page}
+[Open benchmark · work in progress]{.kicker}
+
+# Is it the business, or the pipeline?
+
+[When a payments metric suddenly moves, the first question is whether customers changed or the data did. A late file or a duplicated load can look exactly like a real drop. **twinfault** is an open benchmark that tests whether AI analysts can tell the two apart, built on every USDT, USDC and PYUSD transfer on Ethereum since January 2024.]{.lead}
+:::
+
+::: {.stat-grid .column-page}
+::: {.stat}
+[`{python} compact(totals.transfers)`]{.num}
+
+[stablecoin transfers, reconciled day by day]{.lbl}
+:::
+
+::: {.stat}
+[`{python} compact(pipe.blocks)`]{.num}
+
+[`{python} blocks_note`]{.lbl}
+:::
+
+::: {.stat}
+[`{python} f"{int(totals.days):,}"`]{.num}
+
+[days, `{python} span`]{.lbl}
+:::
+
+::: {.stat}
+[`{python} tests_value`]{.num}
+
+[`{python} tests_note`]{.lbl}
+:::
+
+::: {.stat}
+[€0]{.num}
+
+[a month to run: GitHub Actions, Hugging Face and GitHub Pages]{.lbl}
+:::
+:::
+
+::: {.column-page}
+[Stablecoin transfers per month on Ethereum]{.chart-title}
+
+```{python}
+monthly = sql("""
+    select month, token, sum(transfers) as transfers
+    from fct_daily_payments group by all order by month
+""")
+fig = go.Figure()
+for token in TOKENS:
+    d = monthly[monthly.token == token]
+    fig.add_bar(x=d.month, y=d.transfers, name=token, marker_color=TOKEN_COLORS[token],
+                hovertemplate="%{y:.3s}")
+fig.update_layout(barmode="stack", bargap=0.18)
+fig.update_yaxes(tickformat="~s")
+show(fig, height=340)
+```
+:::
+
+## The idea: look-alike pairs
+
+Every scenario comes as a pair of twins that move the headline metric the same way. One twin is a pipeline fault; the other is a real business change. The metric alone cannot separate them, so an AI analyst has to find the evidence. A pair counts as solved only if both twins are diagnosed correctly, so an agent that always blames the data, or always blames the business, scores zero.
+
+::: {.twins .tf-scroll}
+| Pipeline fault | Business twin | Same headline effect | Evidence that separates them |
+|---|---|---|---|
+| A day's partition not loaded | Real network slowdown | Volume drops | Gaps in block numbers vs continuous blocks with fewer transfers |
+| Same data loaded twice | Genuine surge | Volume jumps | Repeated transaction hashes vs unique ones |
+| Late-arriving data | Real slowdown that day | Yesterday looks low | Load time lags block time, then backfills |
+| Decimals bug, values off by a power of 10 | Real surge in large transfers | Average value jumps | Exact 10× factor vs a shifted distribution |
+| Classification rule changed | Real mix shift | Segment shares move | Rule version changed while raw data did not |
+| Timezone bug | Real change in hourly pattern | Hourly profile shifts | Constant whole-hour offset |
+| Filter drops failed transactions | Real fall in failures | Failure rate falls | Raw and modelled counts disagree |
+:::
+
+Blockchain data suits this unusually well: block numbers are sequential and transaction hashes are unique, so completeness and duplicates can be checked from the data itself.
+
+## Live now
+
+```{=html}
+<div class="card-grid">
+  <a class="tile" href="payments.html"><h4>Payments</h4><p>Daily transfers and value by token, transfer size and route.</p></a>
+  <a class="tile" href="failures.html"><h4>Failures &amp; fees</h4><p>The on-chain approval rate: failed calls, fees and the unusual days.</p></a>
+  <a class="tile" href="data-health.html"><h4>Data health</h4><p>Block gaps, duplicates and load delays, checked before any explanation.</p></a>
+  <a class="tile" href="dbt/index.html"><h4>dbt docs</h4><p>Lineage, model and column descriptions, and every test.</p></a>
+  <a class="tile" href="https://huggingface.co/datasets/andrew142/stablecoin-payments-eth"><h4>Dataset</h4><p>The four source tables and the daily marts, free on Hugging Face.</p></a>
+</div>
+```
+
+## How it is built
+
+```{python}
+#| output: asis
+steps = [
+    ("Source", "AWS Public Blockchain Data", "Ethereum as Parquet on S3"),
+    ("Extract", "DuckDB on GitHub Actions", "a month per job, seven checks"),
+    ("Store", "Hugging Face dataset", "one folder per day, free and public"),
+    ("Model", "dbt on DuckDB", f"daily marts, {tests or 'all'} tests a month"),
+    ("Publish", "Quarto on GitHub Pages", "this site, rebuilt from the marts"),
+]
+cells = "".join(
+    f'<div class="step"><div class="step-kicker">{k}</div><div class="step-name">{n}</div>'
+    f'<div class="step-note">{d}</div></div>' for k, n, d in steps
+)
+print(f'<div class="flow column-page">{cells}</div>')
+```
+
+- **Extract:** DuckDB reads the AWS public Parquet files straight from S3 on free GitHub runners, a month per job and four months at a time. Each month must pass seven checks before upload.
+- **Model:** dbt on DuckDB builds staging tables and three daily marts for each month. A month is published only if every test passes, including a reconciliation that the daily cube adds up to the raw transfers.
+- **Publish:** Quarto rebuilds this site from the marts and GitHub Pages hosts it. Every number on it is computed from the published data at build time. There is no server and no subscription.
+
+## Status
+
+::: {.status-list}
+- [Done]{.badge-done} Extract and check `{python} months` months of transfers, transactions and blocks
+- [Done]{.badge-done} dbt models, daily marts, tests and freshness checks
+- [Done]{.badge-done} This website and the dbt documentation
+- [Next]{.badge-next} The twinfault generator: plants look-alike pairs into any table
+- [Next]{.badge-next} A reference AI analyst that checks the data before blaming the business
+- [Next]{.badge-next} The benchmark and a public leaderboard
+:::
