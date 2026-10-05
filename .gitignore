@@ -165,7 +165,10 @@ venv.bak/
 .ropeproject
 
 # mkdocs documentation
-/site
+site/_site/
+site/.quarto/
+site/dbt/
+hf_data/
 
 # mypy
 .mypy_cache/
