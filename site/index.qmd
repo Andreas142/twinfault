@@ -109,7 +109,8 @@ if not known.empty:
     print(f"""<div class="real-twin"><p><b>A real twin, found in this data.</b>
 On {k.date:%d %B %Y}, {k.token} value moved was {compact(k.volume, "$")}, about
 {compact(k.times_usual)} times its median day. On a dashboard that looks exactly like a decimals bug.
-It wasn't one. {k.reason} (<a href="{k.source}" target="_blank">source</a>). The data was right.
+It wasn't one. {k.reason} (<a href="{k.source}" target="_blank">source</a>). The data was right,
+and the <a href="investigations.html#pyusd-mint">investigation</a> shows it from the data itself.
 Telling cases like this apart, before anyone explains them, is what twinfault tests.</p></div>""")
 ```
 
@@ -120,6 +121,7 @@ Telling cases like this apart, before anyone explains them, is what twinfault te
   <a class="tile" href="payments.html"><h4>Payments</h4><p>Daily transfers and value by token, transfer size and route.</p></a>
   <a class="tile" href="failures.html"><h4>Failures &amp; fees</h4><p>The on-chain approval rate: failed calls, fees and the unusual days.</p></a>
   <a class="tile" href="data-health.html"><h4>Data health</h4><p>Block gaps, duplicates and load delays, checked before any explanation.</p></a>
+  <a class="tile" href="investigations.html"><h4>Investigations</h4><p>Four real anomalies, each checked against the pipeline first, then explained.</p></a>
   <a class="tile" href="dbt/index.html"><h4>dbt docs</h4><p>Lineage, model and column descriptions, and every test.</p></a>
   <a class="tile" href="https://huggingface.co/datasets/andrew142/stablecoin-payments-eth"><h4>Dataset</h4><p>The four source tables and the daily marts, free on Hugging Face.</p></a>
 </div>
@@ -153,6 +155,7 @@ print(f'<div class="flow column-page">{cells}</div>')
 - [Done]{.badge-done} Extract and check `{python} months` months of transfers, transactions and blocks
 - [Done]{.badge-done} dbt models, daily marts, tests and freshness checks
 - [Done]{.badge-done} This website and the dbt documentation
+- [Done]{.badge-done} Four real anomalies investigated: pipeline or business, with evidence
 - [Next]{.badge-next} The twinfault generator: plants look-alike pairs into any table
 - [Next]{.badge-next} A reference AI analyst that checks the data before blaming the business
 - [Next]{.badge-next} The benchmark and a public leaderboard

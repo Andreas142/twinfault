@@ -75,7 +75,7 @@ _con.execute("""
 KNOWN_EVENTS = {
     ("PYUSD", "2025-10-15"): (
         "Paxos minted 300 trillion PYUSD by mistake and burned it within about 30 minutes",
-        "https://www.theblock.co/post/374870/paxos-mistakenly-mints-300-trillion",
+        "https://www.theblock.co/news/ecosystems/2025-10-15-paxos-mistakely-mints-300-trillion-374870",
     ),
 }
 
@@ -139,6 +139,26 @@ def value_outliers() -> pd.DataFrame:
     df["reason"] = [KNOWN_EVENTS.get(k, (None, None))[0] for k in keys]
     df["source"] = [KNOWN_EVENTS.get(k, (None, None))[1] for k in keys]
     return df
+
+
+INVESTIGATIONS = MARTS.parent / "investigations"
+
+
+def inv(name: str) -> pd.DataFrame:
+    """One result table of scripts/investigate.py."""
+    path = INVESTIGATIONS / f"{name}.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is missing: run the 'Phase 3c - investigate the unusual days' workflow first")
+    df = _con.execute(f"select * from read_parquet('{path.as_posix()}')").df()
+    for col in df.columns:
+        if isinstance(df[col].dtype, pd.DatetimeTZDtype):
+            df[col] = df[col].dt.tz_convert(None)
+    return df
+
+
+def etherscan(value: str, kind: str = "tx") -> str:
+    """A short link to a transaction or address on Etherscan."""
+    return f'<a class="eth" href="https://etherscan.io/{kind}/{value}" target="_blank"><code>{value[:8]}…{value[-6:]}</code></a>'
 
 
 def dbt_test_count() -> int | None:

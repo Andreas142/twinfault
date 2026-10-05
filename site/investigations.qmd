@@ -1,0 +1,356 @@
+---
+title: "Investigations"
+subtitle: "Four unusual things in the data, each checked against the pipeline first, then explained."
+toc: true
+toc-title: "Cases"
+---
+
+```{python}
+#| include: false
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from IPython.display import HTML
+from twinfault_site import *
+
+
+def pct(x, digits=1):
+    return "–" if pd.isna(x) else f"{x:.{digits}f}%"
+
+
+def day(ts):
+    return pd.Timestamp(ts).strftime("%d %b %Y").lstrip("0")
+
+
+def check_table(rows):
+    """Rows of (check, result, conclusion) as a table."""
+    table = html_table(pd.DataFrame(rows, columns=["Check", "Result", "What it tells us"]))
+    return HTML(f'<div class="checks">{table}</div>')
+
+
+def close(a, b):
+    """Equal up to floating-point noise."""
+    return abs(a - b) <= 1e-9 * max(abs(a), abs(b))
+
+
+PAXOS = "https://www.theblock.co/news/ecosystems/2025-10-15-paxos-mistakely-mints-300-trillion-374870"
+
+# ---------------------------------------------------------------- case 1 numbers
+n_spikes = inv("failures_nov_2025_spike_days")
+n_pipe = inv("failures_nov_2025_pipeline")
+n_kn = inv("failures_nov_2025_known_vs_new")
+n_sig = inv("failures_nov_2025_signature")
+n_ctx = inv("failures_nov_2025_context")
+n_prof = inv("failures_nov_2025_sender_profile")
+
+peak = n_spikes.loc[n_spikes.failure_rate.idxmax()]
+peak_day = peak.date
+peak_rows = n_spikes[n_spikes.date == peak_day].set_index("token")
+first_spike = n_spikes.date.min()
+
+spike_pipe = n_pipe[n_pipe.spike_day]
+dupes = int(spike_pipe.duplicate_hashes.sum())
+missing = int(spike_pipe.missing_blocks.sum() + spike_pipe.duplicate_blocks.sum())
+rewritten = spike_pipe[spike_pipe.pct_rows_late > 50]
+rewrite_even = (rewritten.pct_rows_late - rewritten.pct_failed_rows_late).abs().max() if len(rewritten) else 0
+
+kn_spike = n_kn[n_kn.spike_day & n_kn.calls_new.notna()]
+new_share = kn_spike.calls_new.sum() / (kn_spike.calls_new.sum() + kn_spike.calls_known.sum())
+kn_peak = n_kn[n_kn.date == peak_day].set_index("token")
+kn_next = n_kn[n_kn.date == peak_day + pd.Timedelta(days=1)].set_index("token")
+
+sig_usdt = n_sig[(n_sig.token == "USDT") & (n_sig.date == peak_day)]
+has_sig = len(sig_usdt) > 0
+if has_sig:
+    sig = sig_usdt.iloc[0]
+
+ctx_base = n_ctx[n_ctx.date < first_spike]
+ctx_peak = n_ctx[n_ctx.date == peak_day]
+fee_base = ctx_base.avg_base_fee_gwei.median()
+fee_peak = ctx_peak.avg_base_fee_gwei.median()
+small_base = ctx_base.pct_transfers_under_10.median()
+small_peak = ctx_peak.pct_transfers_under_10.median()
+
+prof_peak = n_prof[(n_prof.date == peak_day) & (n_prof.token == "USDT")]
+
+# ---------------------------------------------------------------- case 2 numbers
+p_spikes = inv("failures_pyusd_2024_spike_days")
+p_kn = inv("failures_pyusd_2024_known_vs_new")
+p_sig = inv("failures_pyusd_2024_signature")
+p_always = inv("failures_pyusd_2024_always_failing")
+p_peak = p_spikes.loc[p_spikes.failure_rate.idxmax()]
+p_kn_spike = p_kn[p_kn.spike_day & p_kn.calls_new.notna()]
+p_sig_spike = p_sig[p_sig.spike_day]
+p_has_sig = len(p_sig_spike) > 0
+p_bots = p_always[p_always.date == p_peak.date].always_failing_senders.max() if len(p_always) else None
+
+# ---------------------------------------------------------------- case 3 numbers
+mb = inv("outlier_mint_burn")
+osum = inv("outlier_summary")
+big = mb.loc[mb.amount.idxmax()] if len(mb) else None
+if big is not None:
+    s = osum.iloc[0]
+    out_day = value_outliers()
+    out_day = out_day[(out_day.token == big.token) & (out_day.date == big.block_timestamp.normalize())]
+    times = out_day.times_usual.iloc[0] if len(out_day) else None
+    usual_day = value(f"""select median(v) from (select date, sum(volume) as v from fct_daily_payments
+                          where token = '{big.token}' group by date)""")
+    same = mb[mb.counterparty == big.counterparty]
+    burn_back = same[(same.kind == "burn") & same.amount.apply(lambda a: close(a, big.amount))
+                     & (same.block_timestamp > big.block_timestamp)]
+    minutes = (burn_back.block_timestamp.iloc[0] - big.block_timestamp).total_seconds() / 60 if len(burn_back) else None
+    smaller = same[(same.kind == "mint") & same.amount.apply(lambda a: close(a * 1e6, big.amount))
+                   & (same.block_timestamp > big.block_timestamp)]
+    earlier = mb[(mb.kind == "burn") & (mb.block_timestamp < big.block_timestamp)
+                 & mb.amount.apply(lambda a: close(a * 1e6, big.amount))] if len(smaller) else mb.iloc[0:0]
+
+# ---------------------------------------------------------------- case 4 numbers
+rw = inv("rewrite_days")
+rw_t = rw[rw.source_table == "token_transfers"].copy() if len(rw) else rw
+rw_flag = rw_t[rw_t.pattern != "normal"] if len(rw_t) else rw_t
+whole = rw_flag[rw_flag.pattern == "whole day written late"]
+patched = rw_flag[rw_flag.pattern == "written on time, then patched"]
+same_in_all = len(rw) > 0 and rw[rw.pattern != "normal"].groupby("date").source_table.nunique().eq(3).all()
+blocks = inv("rewrite_blocks")
+partial = blocks[(blocks.blocks_entirely_late < blocks.blocks_with_transfers) & (blocks.blocks_entirely_late > 0)]
+partial = partial.assign(share=partial.blocks_entirely_late / partial.blocks_with_transfers).sort_values("share", ascending=False)
+```
+
+Every case follows the order an analyst should follow before explaining a metric move:
+
+1. **Is it the data?** Duplicates, missing blocks, rows written late or rewritten, formats that break joins.
+2. **If not, what changed in behaviour?** Who was involved, how many, new or regular, and whether one program is behind it.
+3. **A verdict with its evidence**, and what remains uncertain.
+
+```{python}
+#| output: asis
+cases = [
+    ("1", "nov-2025", f"USDC and USDT failures jump to {pct(100 * n_spikes.failure_rate.max(), 0)}",
+     f"{peak_day:%b %Y}", "verdict-business", "Real behaviour"),
+    ("2", "pyusd-2024", f"PYUSD failing up to {pct(100 * p_peak.failure_rate, 0)} of the time",
+     f"{p_spikes.date.min():%b}–{p_spikes.date.max():%b %Y}", "verdict-bots", "Bots, not users"),
+    ("3", "pyusd-mint", f"{compact(s.value_moved) if big is not None else 'Trillions of'} PYUSD moved in one day",
+     f"{big.block_timestamp:%b %Y}" if big is not None else "", "verdict-real", "A real event"),
+    ("4", "rewrites", f"{len(rw_flag):,} days the source rewrote after publishing",
+     "2024–2026", "verdict-pipeline", "Pipeline"),
+]
+rows = "".join(
+    f'<a class="case" href="#{anchor}"><span class="case-n">{n}</span>'
+    f'<span class="case-title">{title}<small>{when}</small></span>'
+    f'<span class="verdict {cls}">{label}</span></a>'
+    for n, anchor, title, when, cls, label in cases
+)
+print(f'<div class="case-summary">{rows}</div>')
+```
+
+The checks run on the raw rows of only the days involved ([`scripts/investigate.py`](https://github.com/Andreas142/twinfault/blob/main/scripts/investigate.py)), and every result table is published in [`investigations/`](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth/tree/main/investigations) on Hugging Face. Every number on this page is read from those tables when the site is built.
+
+## 1. USDC and USDT failures jump to 19% {#nov-2025}
+
+[Real behaviour, not the pipeline: a wave of new automated senders]{.verdict .verdict-business}
+
+**The alert.** On `{python} day(peak_day)`, `{python} pct(100 * peak_rows.loc['USDC'].failure_rate)` of direct USDC calls failed against a usual `{python} pct(100 * peak_rows.loc['USDC'].usual_rate, 2)`, and `{python} pct(100 * peak_rows.loc['USDT'].failure_rate)` of USDT calls against `{python} pct(100 * peak_rows.loc['USDT'].usual_rate, 2)`. On a payments team this is the approval-rate drop that gets escalated.
+
+```{python}
+rows = [
+    ("Duplicate rows on spike days", f"{dupes:,}", "Not a double load"),
+    ("Missing or duplicate blocks on spike days", f"{missing:,}", "Nothing lost"),
+    ("Spike days the source rewrote later",
+     ", ".join(day(d) for d in rewritten.date) or "none",
+     f"Failed and successful rows were rewritten alike (gap {rewrite_even:.1f} points), so the rewrite did not create the failures"),
+    ("Calls from new senders (not seen on the ordinary days around the spike)",
+     pct(100 * new_share, 0) + " of all calls on spike days", "A new population of senders"),
+]
+if has_sig:
+    rows += [
+        ("USDT calls that used exactly the same gas",
+         f"{sig.calls_with_fingerprint:,.0f} calls from {sig.senders_with_fingerprint:,.0f} addresses on {day(peak_day)}, "
+         f"all {sig.fingerprint_gas:,} gas; {sig.pct_of_spike_failures:.0f}% of all failed USDT calls on spike days",
+         "One program with a fixed gas limit"),
+        ("USDT failure rate without those calls",
+         f"{pct(sig.pct_failed, 2)} → {pct(sig.pct_failed_without_fingerprint, 2)}", "They explain the USDT jump"),
+    ]
+check_table(rows)
+```
+
+**Who failed.** Split the senders in two. *Regular senders* also appear on the ordinary days around the spike; *new senders* appear only on spike days. About `{python} pct(100 * new_share, 0)` of all direct calls on spike days came from new senders, and they failed far more often. Regular senders were hit on the worst day too (`{python} pct(kn_peak.loc['USDC'].pct_failed_known)` for USDC), but were back to `{python} pct(kn_next.loc['USDC'].pct_failed_known, 2) if 'USDC' in kn_next.index else 'normal'` the next day.
+
+```{python}
+#| fig-cap: "Failure rate of direct calls by day: regular senders and new senders"
+fig = make_subplots(rows=1, cols=2, subplot_titles=["USDT", "USDC"], shared_yaxes=True, horizontal_spacing=0.06)
+for i, token in enumerate(["USDT", "USDC"], start=1):
+    d = n_kn[n_kn.token == token].sort_values("date")
+    fig.add_scatter(x=d.date, y=d.pct_failed_known / 100, name="regular senders", mode="lines+markers",
+                    line=dict(color="#2f6fd6", width=2), marker=dict(size=5), showlegend=(i == 1),
+                    hovertemplate="%{y:.2%}", row=1, col=i)
+    fig.add_scatter(x=d.date, y=d.pct_failed_new / 100, name="new senders", mode="lines+markers",
+                    line=dict(color="#d1495b", width=2), marker=dict(size=5), showlegend=(i == 1),
+                    hovertemplate="%{y:.2%}", row=1, col=i)
+fig.update_yaxes(tickformat=".0%", rangemode="tozero")
+fig.update_xaxes(tickformat="%d %b", dtick=4 * 86400000)
+fig.update_layout(legend=dict(x=0, xanchor="left", y=1.14), margin=dict(t=64))
+show(fig, height=350)
+```
+
+```{python}
+#| output: asis
+if has_sig:
+    single = prof_peak.pct_with_a_single_call.iloc[0] if len(prof_peak) else float("nan")
+    retried = prof_peak.pct_that_also_succeeded.iloc[0] if len(prof_peak) else float("nan")
+    print(f"""**One program.** On {day(peak_day)}, {sig.senders_with_fingerprint:,.0f} different addresses sent
+{sig.calls_with_fingerprint:,.0f} USDT calls, about one each, and every one of them used exactly
+{sig.fingerprint_gas:,} gas. A failed call that runs out of gas uses all the gas it was given, so a round number
+repeated tens of thousands of times points to one program sending every call with the same fixed limit.
+{pct(single, 0)} of the failing USDT senders that day made a single call, and only {pct(retried, 0)} also had a
+successful call that day. Remove those {sig.fingerprint_gas:,}-gas calls and USDT's failure rate that day is
+{pct(sig.pct_failed_without_fingerprint, 2)}, close to its usual level. USDC had no single fingerprint: its
+extra failures were ordinary reverts, in bulk, from new addresses.
+""")
+```
+
+**Why then.** Blocks got cheaper. Ethereum's block gas limit went from 45 to 60 million on 25 November 2025 ([The Block](https://www.theblock.co/news/ecosystems/2025-11-27-ethereum-block-gas-limit-fusaka-380687)), and the Fusaka upgrade followed on 3 December. The average base fee on the worst day was `{python} f"{fee_peak:.3f}"` gwei against `{python} f"{fee_base:.2f}"` in the days before, and transfers under 10 tokens rose from `{python} pct(small_base, 0)` to `{python} pct(small_peak, 0)` of all transfers. Cheap blocks make mass automated sending cheap: Etherscan data reported by [CryptoPotato](https://cryptopotato.com/ethereum-users-warned-as-usdt-dust-attacks-jump-612/) shows USDT transfers under $0.01 rising about sevenfold in the 90 days after Fusaka, mostly address-poisoning campaigns. The data here shows the wave and its fingerprint; who ran it, and why, is not in the data.
+
+**What a payments analyst should take from it.** This has the shape of a card-testing attack: thousands of new "customers" each make one failing attempt and drag the approval rate down, while returning customers are fine. Split new from returning senders before explaining the drop.
+
+## 2. PYUSD failing up to 61% of the time {#pyusd-2024}
+
+[Bots, not users]{.verdict .verdict-bots}
+
+**The alert.** Between `{python} day(p_spikes.date.min())` and `{python} day(p_spikes.date.max())`, PYUSD had `{python} len(p_spikes)` days with its failure rate over three times normal, peaking at `{python} pct(100 * p_peak.failure_rate)` on `{python} day(p_peak.date)` against a usual `{python} pct(100 * p_peak.usual_rate, 2)`.
+
+```{python}
+rows = [
+    ("Failure rate of regular senders on spike days",
+     f"{p_kn_spike.pct_failed_known.max():.2f}% at most", "Real PYUSD users were not affected"),
+    ("Share of spike-day failures from new senders",
+     ("100% on every spike day" if p_kn_spike.pct_failures_from_new.min() >= 99.95
+      else f"{p_kn_spike.pct_failures_from_new.min():.0f}% or more on every spike day"),
+     "The failures came from newcomers"),
+]
+if p_has_sig:
+    s0 = p_sig_spike.iloc[0]
+    rows += [
+        ("Failed calls that used exactly the same gas",
+         f"{s0.pct_of_spike_failures:.1f}% of spike-day failures, all {s0.fingerprint_gas:,} gas",
+         "The same failing call, repeated"),
+        ("Failure rate without those calls",
+         f"{p_sig_spike.pct_failed_without_fingerprint.max():.2f}% at most", "Nothing else was failing"),
+    ]
+if p_bots:
+    rows.append(("Addresses that failed on 90% or more of 5+ calls, on the peak day", f"{p_bots:,.0f}",
+                 "A small fleet, not a crowd"))
+check_table(rows)
+```
+
+```{python}
+#| fig-cap: "PYUSD: failure rate of direct calls by day, regular senders and new senders"
+d = p_kn.sort_values("date")
+fig = go.Figure()
+fig.add_scatter(x=d.date, y=d.pct_failed_new / 100, name="new senders", mode="lines+markers",
+                line=dict(color="#d1495b", width=2), marker=dict(size=5), hovertemplate="%{y:.1%}")
+fig.add_scatter(x=d.date, y=d.pct_failed_known / 100, name="regular senders", mode="lines+markers",
+                line=dict(color="#2f6fd6", width=2), marker=dict(size=5), hovertemplate="%{y:.2%}")
+fig.update_yaxes(tickformat=".0%", rangemode="tozero")
+show(fig, height=300)
+```
+
+**Verdict.** A small group of new addresses kept sending the same call to PYUSD, and it kept failing. Regular users saw no change. PYUSD is a small token, so `{python} f"{p_bots:,.0f} addresses failing on almost every call" if p_bots else "a small group of bots"` were enough to push its headline failure rate to `{python} pct(100 * p_peak.failure_rate, 0)` on the worst day. A failure-rate KPI that does not separate repeat failing senders reports the bots, not the product.
+
+## 3. 600 trillion PYUSD in one day {#pyusd-mint}
+
+[A real event, not a data bug]{.verdict .verdict-real}
+
+```{python}
+#| output: asis
+if big is not None:
+    times_txt = f", about {compact(times)} times its median day" if times else ""
+    print(f"""**The alert.** On {day(big.block_timestamp)}, PYUSD's value moved was {compact(s.value_moved)}
+tokens{times_txt}. Every dashboard check would call this a units bug.
+
+**The evidence, from the data itself.** At {big.block_timestamp:%H:%M} UTC, {compact(big.amount)} PYUSD were minted
+(sent from the zero address) to {etherscan(big.counterparty, "address")}, in transaction {etherscan(big.transaction_hash)}.
+""")
+    if minutes is not None:
+        print(f"""The same amount was burned back {minutes:.0f} minutes later ({etherscan(burn_back.iloc[0].transaction_hash)}).
+Over the day {compact(s.minted)} were minted and {compact(s.burned)} burned, so the error cancelled out, and transfers
+between holders came to {compact(s.moved_between_holders)} tokens, against a median PYUSD day of {compact(usual_day)}.
+Paxos, the issuer, confirmed a technical error ([The Block]({PAXOS})).
+""")
+    if len(smaller):
+        m = smaller.iloc[0]
+        print(f"""
+**A detail the news did not mention.** {compact(big.amount)} is exactly a million times {compact(m.amount)},
+and PYUSD has 6 decimal places. At {m.block_timestamp:%H:%M} UTC the same address received a mint of exactly
+{compact(m.amount)} PYUSD ({etherscan(m.transaction_hash)}).""")
+        if len(earlier):
+            e = earlier.iloc[0]
+            print(f"""Earlier that day, at {e.block_timestamp:%H:%M} UTC, exactly {compact(e.amount)} PYUSD had been burned
+({etherscan(e.transaction_hash)}).""")
+        print("""The data cannot prove intent, but the amounts are consistent with a mint of the right number entered
+in the wrong units: the decimals bug from the twin table, except that this time it really happened on-chain.
+""")
+```
+
+```{python}
+#| output: asis
+if len(mb):
+    t = mb[mb.amount >= 1e8].sort_values(["block_timestamp", "block_number"])
+    table = pd.DataFrame({
+        "Time (UTC)": t.block_timestamp.dt.strftime("%H:%M"),
+        "Event": t.kind,
+        "PYUSD": [compact(a) for a in t.amount],
+        "Address": [etherscan(a, "address") for a in t.counterparty],
+        "Transaction": [etherscan(h) for h in t.transaction_hash],
+    })
+    print('<p class="chart-title">Mints and burns of 100 million PYUSD or more that day</p>')
+    print(html_table(table, numeric=("PYUSD",)))
+```
+
+**A catch on the way.** The first version of this check found no mints at all. The transfer table stores addresses as 32-byte words (`0x` followed by 24 zeros and the address), while transactions store plain 20-byte addresses, so a comparison with the usual zero address silently matched nothing. The fix compares the last 40 characters. A join that returns nothing, without an error, is exactly the kind of fault this benchmark is built to plant.
+
+## 4. Days the source rewrote after publishing {#rewrites}
+
+[Pipeline: the upstream source changed past data]{.verdict .verdict-pipeline}
+
+**The alert.** `{python} f"{len(rw_flag):,}"` of `{python} f"{len(rw_t):,}"` days (`{python} pct(100 * len(rw_flag) / max(len(rw_t), 1))`) have rows written much later than the usual daily load.
+
+```{python}
+rows = [
+    ("Days with no row written within two days of the day itself",
+     f"{len(whole):,} days; median {whole.last_written_hours_after_day.median() / 24:.1f} days later, "
+     f"worst {whole.last_written_hours_after_day.max() / 24:,.0f} days",
+     "Whole days delivered or replaced late"),
+    ("Days loaded on time, then patched",
+     f"{len(patched):,} days; median {patched.last_written_hours_after_day.median():.0f} hours later, "
+     f"worst {patched.last_written_hours_after_day.max() / 24:,.0f} days",
+     "Part of the day rewritten afterwards"),
+    ("Same days in transfers, transactions and blocks", "yes" if same_in_all else "no",
+     "The source reprocesses whole days, all tables together" if same_in_all else "Tables are rewritten separately"),
+]
+if len(partial):
+    p0 = partial.iloc[0]
+    rows.append(("Example of a patch",
+                 f"{day(p0.date)}: {p0.blocks_entirely_late:,} of {p0.blocks_with_transfers:,} blocks ({p0.share:.0%}) rewritten",
+                 "Most of the day changed, not a few late rows" if p0.share > 0.5 else "Part of the day changed"))
+check_table(rows)
+```
+
+```{python}
+#| fig-cap: "Token-transfer days: how long after the day its last rows were written (log scale)"
+fig = go.Figure()
+normal = rw_t[rw_t.pattern == "normal"]
+fig.add_scatter(x=normal.date, y=normal.last_written_hours_after_day.clip(lower=0.5), mode="markers", name="normal",
+                marker=dict(color="#c9d3e0", size=4), hovertemplate="%{x|%d %b %Y}: %{y:.0f} h<extra></extra>")
+for name, color in (("written on time, then patched", "#e0a100"), ("whole day written late", "#d1495b")):
+    d = rw_t[rw_t.pattern == name]
+    fig.add_scatter(x=d.date, y=d.last_written_hours_after_day, mode="markers", name=name,
+                    marker=dict(color=color, size=7), hovertemplate="%{x|%d %b %Y}: %{y:,.0f} h<extra></extra>")
+fig.update_layout(hovermode="closest")
+fig.update_yaxes(type="log", tickvals=[1, 10, 24, 48, 168, 720, 2160, 8760],
+                 ticktext=["1 h", "10 h", "1 day", "2 days", "1 week", "1 month", "3 months", "1 year"])
+show(fig, height=320)
+```
+
+**What we cannot know.** The source keeps only the latest version of each day, so what changed on these days is gone. For the whole-day cases we cannot even tell whether the day was missing until then or fully replaced. Any number for these days may differ from what a dashboard showed when the day was first loaded.
+
+**What it means.** Load history matters. A warehouse that keeps a snapshot of each load could show exactly what changed and when; one that only keeps the latest data cannot. Until then, the [data health](data-health.html) page flags these days so that nobody explains a move on one of them without checking first.

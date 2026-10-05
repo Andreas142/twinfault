@@ -290,3 +290,91 @@ table.tf-table th.num {
 .real-twin p {
   margin: 0;
 }
+
+// Investigations: one verdict label per case
+.verdict {
+  display: inline-block;
+  font-size: 0.82rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  padding: 0.28rem 0.75rem;
+  border-radius: 999px;
+  margin: 0 0 0.9rem;
+  border: 1px solid transparent;
+}
+.verdict-business { background: #e8f1fd; color: #1d4f9e; border-color: #c4d8f5; }
+.verdict-bots     { background: #f2edfb; color: #57409a; border-color: #dcd1f3; }
+.verdict-real     { background: #fff6dc; color: #7a5a00; border-color: #f1df9e; }
+.verdict-pipeline { background: #fdecee; color: #a3283a; border-color: #f4c6cd; }
+
+.case-summary {
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 1.2rem 0 2rem;
+}
+.case-summary a.case {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr auto;
+  gap: 0.2rem 0.9rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  color: inherit;
+  text-decoration: none;
+  border-top: 1px solid #eef1f5;
+}
+.case-summary a.case:first-child { border-top: none; }
+.case-summary a.case:hover { background: #f7f9fc; }
+.case-summary .case-n { font-weight: 700; color: #8a94a3; }
+.case-summary .case-title { font-weight: 600; line-height: 1.3; }
+.case-summary .case-title small { display: block; font-weight: 400; color: #6b7685; font-size: 0.85rem; }
+.case-summary .verdict { margin: 0; white-space: nowrap; }
+@media (max-width: 640px) {
+  .case-summary a.case { grid-template-columns: 1.6rem 1fr; }
+  .case-summary .verdict { grid-column: 2; justify-self: start; }
+}
+
+// Evidence tables on the Investigations page: text wraps, three even columns
+.checks table.tf-table {
+  min-width: 560px;
+  margin-bottom: 1.2rem;
+}
+.checks table.tf-table td {
+  white-space: normal;
+  vertical-align: top;
+  width: 33%;
+}
+.checks table.tf-table td:first-child {
+  color: #3d4756;
+}
+.checks table.tf-table td:last-child {
+  color: #6b7685;
+}
+// Etherscan links: keep the short hash on one line
+a.eth code:not(.sourceCode) {
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .checks table.tf-table { min-width: 0; }
+  .checks table.tf-table thead { display: none; }
+  .checks table.tf-table,
+  .checks table.tf-table tbody,
+  .checks table.tf-table tr,
+  .checks table.tf-table td {
+    display: block;
+    width: auto;
+  }
+  .checks table.tf-table tr {
+    padding: 0.55rem 0;
+    border-bottom: 1px solid #e3e8ef;
+  }
+  .checks table.tf-table td {
+    border: none;
+    padding: 0.05rem 0.25rem;
+  }
+  .checks table.tf-table td:first-child {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #6b7685;
+  }
+}

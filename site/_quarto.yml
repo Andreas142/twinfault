@@ -20,6 +20,8 @@ website:
         text: Failures & fees
       - href: data-health.qmd
         text: Data health
+      - href: investigations.qmd
+        text: Investigations
     right:
       - text: dbt docs
         href: dbt/index.html

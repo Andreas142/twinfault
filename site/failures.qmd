@@ -149,6 +149,7 @@ so ±4 is roughly four standard deviations and is unlikely to be noise.</p>
 <p><b>Pipeline that day</b> comes from the <a href="data-health.html">data health</a> checks.
 If it is not OK, the move may be a data problem, not a change in behaviour, and should be
 checked before anyone explains it. That question is what the twinfault benchmark tests.</p>
+<p>The largest spikes are explained, with evidence, on the <a href="investigations.html">Investigations</a> page.</p>
 <p class="note">Failed transactions emit no transfer events, so failures are only visible in the
 transactions table, from calls sent straight to the token contracts. Days with fewer than 500
 direct calls for a token are left out.</p>

@@ -148,7 +148,8 @@ or 62 days old (error).</li>
 <li><b>This page</b>: a day is <i>late or rewritten</i> if its slowest row was written more than
 twice the usual delay ({usual_lag:.0f} hours) after its block. Either the data arrived late, or the
 source rewrote that day afterwards; both mean the day's numbers may have changed after they were
-first published.</li>
+first published. What these days look like is shown on the
+<a href="investigations.html#rewrites">Investigations</a> page.</li>
 </ol>
 <p class="note">The source data is AWS Public Blockchain Data, which AWS labels experimental.
 That is why completeness is checked from the data itself: block numbers are sequential,
