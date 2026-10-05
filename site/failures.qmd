@@ -49,7 +49,7 @@ out of `{python} compact(cur.calls)` direct calls to the token contracts
 ::: {.valuebox icon="fuel-pump" color="#eaf1fc"}
 Typical fee per direct call, in ETH
 
-`{python} f"{cur.fee:.2g}"`
+`{python} small(cur.fee)`
 
 `{python} change(cur.fee, old.fee)` `{python} since` (median of daily medians)
 :::
