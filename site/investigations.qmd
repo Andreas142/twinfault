@@ -80,6 +80,10 @@ p_sig = inv("failures_pyusd_2024_signature")
 p_always = inv("failures_pyusd_2024_always_failing")
 p_peak = p_spikes.loc[p_spikes.failure_rate.idxmax()]
 p_kn_spike = p_kn[p_kn.spike_day & p_kn.calls_new.notna()]
+_all = p_kn[p_kn.spike_day].fillna(0)
+_failed_new = (_all.calls_new * _all.pct_failed_new).sum()
+_failed_known = (_all.calls_known * _all.pct_failed_known).sum()
+p_new_fail_share = _failed_new / (_failed_new + _failed_known)
 p_sig_spike = p_sig[p_sig.spike_day]
 p_has_sig = len(p_sig_spike) > 0
 p_bots = p_always[p_always.date == p_peak.date].always_failing_senders.max() if len(p_always) else None
@@ -222,10 +226,8 @@ extra failures were ordinary reverts, in bulk, from new addresses.
 rows = [
     ("Failure rate of regular senders on spike days",
      f"{p_kn_spike.pct_failed_known.max():.2f}% at most", "Real PYUSD users were not affected"),
-    ("Share of spike-day failures from new senders",
-     ("100% on every spike day" if p_kn_spike.pct_failures_from_new.min() >= 99.95
-      else f"{p_kn_spike.pct_failures_from_new.min():.0f}% or more on every spike day"),
-     "The failures came from newcomers"),
+    ("Share of all failed calls on spike days that came from new senders",
+     pct(100 * p_new_fail_share), "The failures came from newcomers"),
 ]
 if p_has_sig:
     s0 = p_sig_spike.iloc[0]
