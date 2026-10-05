@@ -1,0 +1,156 @@
+---
+title: "Failures & fees"
+format: dashboard
+scrolling: true
+---
+
+```{python}
+#| include: false
+import pandas as pd
+import plotly.graph_objects as go
+from IPython.display import HTML
+from twinfault_site import *
+
+month = last_full_month()
+prev = (pd.Timestamp(month + "-01") - pd.DateOffset(months=1)).strftime("%Y-%m")
+m = sql(f"""
+    select month,
+           sum(direct_calls) as calls,
+           sum(failed_calls) as failed,
+           sum(failed_calls) / sum(direct_calls) as rate,
+           median(median_fee_eth) as fee
+    from fct_daily_token_health
+    where month in ('{month}', '{prev}')
+    group by month
+""").set_index("month")
+cur, old = m.loc[month], m.loc[prev]
+since = f"vs {month_label(prev)}"
+points = (cur.rate - old.rate) * 100
+```
+
+## Row {height=190px}
+
+::: {.valuebox icon="x-octagon" color="#fdecee"}
+Failed direct calls, `{python} month_label(month)`
+
+`{python} f"{cur.rate:.2%}"`
+
+`{python} f"{points:+.2f}"` points `{python} since`
+:::
+
+::: {.valuebox icon="exclamation-triangle" color="#fff4d6"}
+Failed calls in `{python} month_label(month)`
+
+`{python} compact(cur.failed)`
+
+out of `{python} compact(cur.calls)` direct calls to the token contracts
+:::
+
+::: {.valuebox icon="fuel-pump" color="#eaf1fc"}
+Typical fee per direct call, in ETH
+
+`{python} f"{cur.fee:.2g}"`
+
+`{python} change(cur.fee, old.fee)` `{python} since` (median of daily medians)
+:::
+
+## Row {height=420px}
+
+```{python}
+#| title: Daily failure rate of direct calls (7-day average)
+health = sql("""
+    select h.date, h.token, h.direct_calls, h.failed_calls, h.median_fee_eth, p.avg_base_fee_gwei
+    from fct_daily_token_health as h
+    left join fct_daily_pipeline as p using (date)
+    order by h.date
+""")
+fig = go.Figure()
+for token in TOKENS:
+    d = health[health.token == token].set_index("date")
+    rate = d.failed_calls.rolling(7, min_periods=1).sum() / d.direct_calls.rolling(7, min_periods=1).sum()
+    fig.add_scatter(x=rate.index, y=rate.values, name=token, mode="lines",
+                    line=dict(color=TOKEN_COLORS[token], width=2), hovertemplate="%{y:.2%}")
+fig.update_yaxes(tickformat=".1%", rangemode="tozero")
+show(fig)
+```
+
+```{python}
+#| title: Failed direct calls per month
+monthly = sql("""
+    select month, token, sum(failed_calls) as failed
+    from fct_daily_token_health group by all order by month
+""")
+fig = go.Figure()
+for token in TOKENS:
+    d = monthly[monthly.token == token]
+    fig.add_bar(x=d.month, y=d.failed, name=token, marker_color=TOKEN_COLORS[token],
+                hovertemplate="%{y:,.0f}")
+fig.update_layout(barmode="stack", bargap=0.15)
+fig.update_yaxes(tickformat="~s")
+show(fig)
+```
+
+## Row {height=420px}
+
+```{python}
+#| title: Typical fee per direct call (daily median, ETH, log scale)
+fig = go.Figure()
+for token in TOKENS:
+    d = health[health.token == token].set_index("date").median_fee_eth.rolling(7, min_periods=1).median()
+    fig.add_scatter(x=d.index, y=d.values, name=token, mode="lines",
+                    line=dict(color=TOKEN_COLORS[token], width=2), hovertemplate="%{y:.3g} ETH")
+fig.update_yaxes(type="log", tickformat=".1~e")
+show(fig)
+```
+
+```{python}
+#| title: Failure rate vs network base fee (one dot per day; ρ = rank correlation)
+fig = go.Figure()
+for token in TOKENS:
+    d = health[(health.token == token) & (health.direct_calls >= 500)].copy()
+    d["rate"] = d.failed_calls / d.direct_calls
+    rho = d[["avg_base_fee_gwei", "rate"]].corr(method="spearman").iloc[0, 1]
+    fig.add_scatter(x=d.avg_base_fee_gwei, y=d.rate, name=f"{token} (ρ = {rho:.2f})", mode="markers",
+                    marker=dict(color=TOKEN_COLORS[token], size=5, opacity=0.55),
+                    customdata=d.date.astype(str),
+                    hovertemplate="%{customdata}<br>base fee %{x:.2f} gwei<br>failure rate %{y:.2%}<extra></extra>")
+fig.update_layout(hovermode="closest")
+fig.update_xaxes(type="log", title_text="average base fee that day (gwei)", showgrid=True, gridcolor=GRID,
+                 tickvals=[0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500])
+fig.update_yaxes(tickformat=".1%")
+show(fig)
+```
+
+## Row
+
+```{python}
+#| title: Unusual days for the failure rate, with the pipeline verdict for that day
+days = unusual_days(
+    "select date, token, failure_rate from fct_daily_token_health where direct_calls >= 500",
+    "failure_rate",
+)
+table = pd.DataFrame({
+    "Day": days.date.dt.strftime("%a %d %b %Y"),
+    "Token": days.segment,
+    "Failure rate": days.value.map("{:.2%}".format),
+    "Usual": days.usual.map("{:.2%}".format),
+    "Score": days.score.map("{:+.1f}".format),
+    "Pipeline that day": days.pipeline.map(pill),
+})
+HTML(html_table(table, numeric=("Failure rate", "Usual", "Score")))
+```
+
+```{python}
+#| title: How to read this
+HTML("""
+<p><b>Usual</b> is the median failure rate on the same weekday over the previous eight weeks.
+<b>Score</b> is the gap divided by a robust spread (1.4826 × the median absolute deviation),
+so ±4 is roughly four standard deviations and is unlikely to be noise.</p>
+<p><b>Pipeline that day</b> comes from the <a href="data-health.html">data health</a> checks.
+If it is not OK, the move may be a data problem, not a change in behaviour, and should be
+checked before anyone explains it. That question is what the twinfault benchmark tests.</p>
+<p class="note">Failed transactions emit no transfer events, so failures are only visible in the
+transactions table, from calls sent straight to the token contracts. Days with fewer than 500
+direct calls for a token are left out.</p>
+""")
+```
