@@ -1,0 +1,281 @@
+/*-- scss:defaults --*/
+$font-family-sans-serif: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+$body-color: #16202e;
+$body-bg: #ffffff;
+$primary: #2f6fd6;
+$success: #1a9e77;
+$warning: #e0a100;
+$danger: #d1495b;
+$navbar-bg: #0f1b2d;
+$navbar-fg: #e8eef7;
+$navbar-hl: #ffffff;
+$footer-bg: #f6f8fb;
+$link-color: #2f6fd6;
+$border-radius: 10px;
+$headings-font-weight: 650;
+
+/*-- scss:rules --*/
+.navbar-brand .navbar-title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+// Landing page
+.hero {
+  padding: 2.5rem 0 1rem;
+}
+.hero h1 {
+  font-size: clamp(2rem, 5vw, 3.1rem);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.8rem;
+}
+.hero .lead {
+  font-size: 1.2rem;
+  color: #3b4656;
+  max-width: 46rem;
+}
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: #2f6fd6;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.9rem;
+  margin: 1.6rem 0 2rem;
+}
+.stat {
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  padding: 0.95rem 1.1rem;
+  background: #fbfcfe;
+}
+.stat .num {
+  font-size: 1.65rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.stat .lbl {
+  color: #6b7685;
+  font-size: 0.86rem;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+.card-grid a.tile {
+  display: block;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  padding: 1rem 1.15rem;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.card-grid a.tile:hover {
+  border-color: #2f6fd6;
+  box-shadow: 0 4px 18px rgba(15, 27, 45, 0.08);
+}
+.card-grid .tile h4 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+.card-grid .tile p {
+  margin: 0;
+  color: #5b6676;
+  font-size: 0.93rem;
+}
+
+.status-list ul {
+  list-style: none;
+  padding-left: 0;
+}
+.status-list li {
+  padding: 0.35rem 0;
+  border-bottom: 1px dashed #e3e8ef;
+}
+.badge-done,
+.badge-next {
+  display: inline-block;
+  min-width: 4.6rem;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 650;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  margin-right: 0.6rem;
+}
+.badge-done {
+  background: #e3f5ee;
+  color: #11795b;
+}
+.badge-next {
+  background: #eef1f6;
+  color: #5b6676;
+}
+
+// Dashboards
+.quarto-dashboard {
+  background: #f4f6fa;
+}
+.quarto-dashboard .card {
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 27, 45, 0.04);
+}
+.quarto-dashboard .card-header {
+  background: #ffffff;
+  border-bottom: 1px solid #eef1f5;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #16202e;
+}
+.quarto-dashboard .bslib-value-box {
+  border: 1px solid #e3e8ef;
+}
+.quarto-dashboard .bslib-value-box .value-box-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  opacity: 0.8;
+}
+.quarto-dashboard .bslib-value-box .value-box-value {
+  font-size: 2.1rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+.quarto-dashboard .bslib-value-box p:last-child {
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.quarto-dashboard .bslib-value-box .value-box-showcase .bi {
+  font-size: 2.2rem;
+  opacity: 0.7;
+}
+.note {
+  color: #6b7685;
+  font-size: 0.9rem;
+}
+table.tf-table {
+  width: 100%;
+  font-size: 0.88rem;
+  border-collapse: collapse;
+}
+table.tf-table th {
+  text-align: left;
+  color: #6b7685;
+  font-weight: 600;
+  border-bottom: 1px solid #e3e8ef;
+  padding: 0.35rem 0.5rem;
+  vertical-align: bottom;
+}
+table.tf-table td {
+  border-bottom: 1px solid #f0f2f6;
+  padding: 0.35rem 0.5rem;
+  white-space: nowrap;
+}
+table.tf-table td.num,
+table.tf-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.05rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.pill-ok {
+  background: #e3f5ee;
+  color: #11795b;
+}
+.pill-warn {
+  background: #fff4d6;
+  color: #8a6100;
+}
+.pill-bad {
+  background: #fde8eb;
+  color: #a3283b;
+}
+
+.chart-title {
+  display: block;
+  font-weight: 650;
+  margin: 0.5rem 0 -0.5rem;
+}
+
+// Pipeline flow on the landing page
+.flow {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1.6rem;
+  margin: 1.2rem 0 1.6rem;
+}
+.flow .step {
+  position: relative;
+  border: 1px solid #e3e8ef;
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  background: #fbfcfe;
+}
+.flow .step:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  right: -1.3rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #8a94a3;
+  font-size: 1.1rem;
+}
+.flow .step-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  font-weight: 650;
+  color: #2f6fd6;
+}
+.flow .step-name {
+  font-weight: 650;
+  line-height: 1.25;
+  margin: 0.2rem 0;
+}
+.flow .step-note {
+  color: #6b7685;
+  font-size: 0.86rem;
+}
+@media (max-width: 900px) {
+  .flow {
+    grid-template-columns: 1fr;
+    gap: 1.4rem;
+  }
+  .flow .step:not(:last-child)::after {
+    content: "↓";
+    right: auto;
+    left: 50%;
+    top: auto;
+    bottom: -1.35rem;
+    transform: translateX(-50%);
+  }
+}
+
+.tf-scroll {
+  overflow-x: auto;
+}
+
+@media (max-width: 600px) {
+  .twins table {
+    font-size: 0.82rem;
+  }
+  .stat .num {
+    font-size: 1.4rem;
+  }
+}
