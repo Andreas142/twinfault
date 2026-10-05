@@ -1,0 +1,48 @@
+project:
+  type: website
+  output-dir: _site
+  resources:
+    - dbt/
+
+website:
+  title: "twinfault"
+  description: "Is it the business or the pipeline? Stablecoin payments on Ethereum, checked and explained."
+  site-url: https://andreas142.github.io/twinfault/
+  repo-url: https://github.com/Andreas142/twinfault
+  page-navigation: false
+  navbar:
+    left:
+      - href: index.qmd
+        text: Overview
+      - href: payments.qmd
+        text: Payments
+      - href: failures.qmd
+        text: Failures & fees
+      - href: data-health.qmd
+        text: Data health
+    right:
+      - text: dbt docs
+        href: dbt/index.html
+        target: _blank
+      - text: Dataset
+        href: https://huggingface.co/datasets/andrew142/stablecoin-payments-eth
+        target: _blank
+      - icon: github
+        href: https://github.com/Andreas142/twinfault
+        aria-label: GitHub repository
+  page-footer:
+    left: "Built by Andreas Othonos · Data: AWS Public Blockchain Data (MIT-0)"
+    right: "Rebuilt from the published data on every run · €0 to run"
+
+format:
+  html:
+    theme: [cosmo, styles.scss]
+    toc: false
+    smooth-scroll: true
+
+execute:
+  echo: false
+  warning: false
+
+# Show only each cell's final result (dashboards default to every expression).
+ipynb-shell-interactivity: last
