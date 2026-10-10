@@ -1,0 +1,50 @@
+name: Phase 4 - investigate every unusual day
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_episodes:
+        description: "How many of the most severe episodes to investigate on the raw rows"
+        required: true
+        default: "40"
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Find, investigate and upload every unusual day
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MAX_EPISODES: ${{ inputs.max_episodes }}
+        run: python scripts/watch.py --out watch --max-episodes "$MAX_EPISODES" --upload
+
+      - name: Show the results on this page
+        if: always()
+        run: |
+          for f in report_summary.md report_agreement.md; do
+            if [ -f "watch/$f" ]; then cat "watch/$f" >> "$GITHUB_STEP_SUMMARY"; echo >> "$GITHUB_STEP_SUMMARY"; fi
+          done
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: watch
+          path: watch/
+          if-no-files-found: ignore
+          retention-days: 30
