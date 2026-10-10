@@ -24,7 +24,8 @@ def move(r) -> str:
     if r.metric == "failure_rate":
         def p(x):
             return f"{100 * x:.2g}%" if 0 < x < 0.001 else f"{100 * x:.2f}%"
-        return f"{p(r.peak_value)} vs {p(r.peak_usual)}"
+        usual = "about 0%" if r.peak_usual <= 1.01e-4 else p(r.peak_usual)
+        return f"{p(r.peak_value)} vs {usual}"
     ratio = f"{compact(r.peak_ratio)}×" if r.peak_ratio >= 1000 else f"{r.peak_ratio:.2f}×"
     return f"{compact(r.peak_value)} vs {compact(r.peak_usual)} ({ratio})"
 

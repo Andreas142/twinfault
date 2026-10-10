@@ -100,21 +100,37 @@ def raw_views(con: duckdb.DuckDBPyConnection, data: Path, days: list[str]) -> No
             con.execute(f"create or replace view {name} as select {EMPTY[name]} where false")
 
 
-def needed(ep: pd.Series, days: pd.DataFrame, flagged: set[str]) -> dict[str, list[str]]:
-    """The raw days an episode needs: its peak day, and the last 7 ordinary days before it began.
+def wave_start(ep: pd.Series, eps: pd.DataFrame) -> pd.Timestamp:
+    """The start of the wave an episode belongs to.
+
+    Episodes of the same metric, token and direction less than 30 days apart are one wave.
+    A long wave raises the "usual" level as it goes, so its later days can look ordinary;
+    comparing against days before the whole wave keeps it out of the baseline.
+    """
+    same = eps[(eps.metric == ep.metric) & (eps.token == ep.token) & (eps.direction == ep.direction)]
+    start = pd.Timestamp(ep.start)
+    while True:
+        earlier = same[(same.end < start) & (same.end >= start - pd.Timedelta(days=30))]
+        if earlier.empty:
+            return start
+        start = pd.Timestamp(earlier.start.min())
+
+
+def needed(ep: pd.Series, days: pd.DataFrame, flagged: set[str], eps: pd.DataFrame) -> dict[str, list[str]]:
+    """The raw days an episode needs: its peak day, and the last 7 ordinary days before its wave began.
 
     Ordinary means that metric and token were not unusual that day and the pipeline flagged
     nothing, so an earlier wave never becomes part of "usual".
     """
-    start = pd.Timestamp(ep.start)
+    start = wave_start(ep, eps)
     quiet = days[(days.metric == ep.metric) & (days.token == ep.token) & (days.date < start)
-                 & (days.date >= start - pd.Timedelta(days=90)) & (days.score.abs() < 3)]
+                 & (days.date >= start - pd.Timedelta(days=120)) & (days.score.abs() < 3)]
     dates = [d.strftime("%Y-%m-%d") for d in quiet.date if d.strftime("%Y-%m-%d") not in flagged]
     baseline = dates[-BASELINE_DAYS:]
     if len(baseline) < 3:  # too early in the data: fall back to the week before
         baseline = [(start - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(BASELINE_DAYS, 0, -1)]
     peak = pd.Timestamp(ep.peak_date).strftime("%Y-%m-%d")
-    return {"peak": peak, "baseline": baseline, "folder": RAW[ep.metric]}
+    return {"peak": peak, "baseline": baseline, "folder": RAW[ep.metric], "wave_start": start.strftime("%Y-%m-%d")}
 
 
 def files_for(plan: dict) -> set[tuple[str, str]]:
@@ -132,14 +148,16 @@ def investigate(con, ep: pd.Series, plan: dict) -> tuple[dict, dict]:
     bf = behaviour(con, ep.token, peak, baseline)
     cf = checks.context_facts(con, ep.metric, ep.token, peak, baseline)
     return (verdicts.decide(ep.metric, ep.direction, pf, bf, cf, ep.token),
-            {"pipeline": pf, "behaviour": bf, "context": cf, "baseline_days": baseline})
+            {"pipeline": pf, "behaviour": bf, "context": cf, "baseline_days": baseline,
+             "wave_start": plan["wave_start"]})
 
 
 # ------------------------------------------------------------------ report
 
 def move(row) -> str:
     if row.metric == "failure_rate":
-        return f"{verdicts.pct(row.peak_value, 2)} vs {verdicts.pct(row.peak_usual, 2)}"
+        usual = "about 0%" if row.peak_usual <= 1.01e-4 else verdicts.pct(row.peak_usual, 2)
+        return f"{verdicts.pct(row.peak_value, 2)} vs {usual}"
     ratio = f"{verdicts.big(row.peak_ratio)}×" if row.peak_ratio >= 1000 else f"{row.peak_ratio:.2f}×"
     return f"{verdicts.big(row.peak_value)} vs {verdicts.big(row.peak_usual)} ({ratio})"
 
@@ -250,7 +268,7 @@ def main() -> int:
     eps["caveats"] = [[] for _ in range(len(eps))]
 
     chosen = list(eps.index[: args.max_episodes])
-    plans = {i: needed(eps.loc[i], days, flagged_days) for i in chosen}
+    plans = {i: needed(eps.loc[i], days, flagged_days, eps) for i in chosen}
     # Work through episodes in date order, so overlapping weeks are downloaded once.
     order = sorted(chosen, key=lambda i: plans[i]["peak"])
     facts = {}

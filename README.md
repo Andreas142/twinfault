@@ -2,7 +2,7 @@
 
 **Is it the business, or the pipeline?** When a payments metric suddenly moves, the first question is whether customers changed or the data did. twinfault answers it on real data: every USDT, USDC and PYUSD transfer on Ethereum from January 2024 to September 2026.
 
-**[Live site](https://andreas142.github.io/twinfault/)** · **[Investigations](https://andreas142.github.io/twinfault/investigations)** · **[Dataset on Hugging Face](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth)** · **[dbt docs](https://andreas142.github.io/twinfault/dbt/)**
+**[Live site](https://andreas142.github.io/twinfault/)** · **[Every unusual day](https://andreas142.github.io/twinfault/watch)** · **[Investigations](https://andreas142.github.io/twinfault/investigations)** · **[Dataset on Hugging Face](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth)** · **[dbt docs](https://andreas142.github.io/twinfault/dbt/)**
 
 | 733M | 7.18M | 1,004 | 21 | €0 |
 |:---:|:---:|:---:|:---:|:---:|
@@ -21,9 +21,20 @@ Four real anomalies, each checked against the pipeline first, then explained wit
 
 The method is the same every time: **rule out the pipeline, break the metric down until one group explains the move, remove that group and show the metric returns to normal, then corroborate.** One check went wrong on the way and is kept on the page: transfer addresses are stored as 32-byte words, so the first search for mints silently matched nothing.
 
-## The benchmark idea: look-alike pairs
+## Every unusual day, found and checked automatically
 
-Every scenario is a pair of twins that move the headline metric the same way. One twin is a pipeline fault; the other is a real business change. The metric alone cannot separate them, so an AI analyst has to find the evidence. A pair counts as solved only if both twins are diagnosed correctly, so an agent that always blames the data, or always blames the business, scores zero.
+The four cases above were worked out by hand. `scripts/watch.py` does the same work on its own, across the whole dataset, without being told a date. Full results: **[Every unusual day](https://andreas142.github.io/twinfault/watch)**.
+
+1. **Find:** score every token and day for transfers, value moved and failure rate against the same weekday over the previous eight weeks, and group unusual days into episodes. It finds 133.
+2. **Check the pipeline first** on the raw rows of the 40 most severe: missing or repeated blocks, an incomplete day, repeated rows, a mart that disagrees with its raw rows, amounts that changed units, days the source rewrote.
+3. **Then explain the move:** one program (an exact gas fingerprint), new addresses, a few addresses, dust, the issuer minting or burning, a few huge transfers. It compares against ordinary days before the whole wave, so an earlier wave never counts as "usual". If no group explains the move, it says so instead of inventing a reason.
+4. **Score itself:** it is checked afterwards against the four hand investigations, which it never sees while deciding. **It matches all four**, and it flags the same 61 rewritten days.
+
+Things it found that were not investigated by hand: USDT dust waves after the Fusaka upgrade (December 2025 to January 2026, up to 3× the usual transfers, mostly under 1 token) and the day they ended (late April 2026, when daily USDT transfers halved); a 368B USDC day (22 March 2026) where ten addresses sent most of the extra value; and several more failure waves from single programs, each with its own exact gas value.
+
+## The look-alike pairs
+
+Every metric move has two possible explanations that look the same on a dashboard: a pipeline fault, or a real change in behaviour. The metric alone cannot separate them; the rows can. Most of these checks run automatically on every unusual day.
 
 | Pipeline fault | Business twin | Same headline effect | Evidence that separates them |
 |---|---|---|---|
@@ -35,7 +46,7 @@ Every scenario is a pair of twins that move the headline metric the same way. On
 | Timezone bug | Real change in hourly pattern | Hourly profile shifts | Constant whole-hour offset |
 | Filter drops failed transactions | Real fall in failures | Failure rate falls | Raw and modelled counts disagree |
 
-The PYUSD mint above is a real decimals twin: on a dashboard it looks exactly like a units bug, and it wasn't one.
+The PYUSD mint above is a real decimals twin: on a dashboard it looks exactly like a units bug, and it wasn't one. The automatic checks tell them apart the same way: a units bug moves every percentile of the amounts by exactly a power of ten, while a mint shows up as transfers from the zero address.
 
 ## How it is built
 
@@ -45,7 +56,7 @@ flowchart LR
     B --> C["Hugging Face dataset<br/>one folder per day"]
     C --> D["dbt on DuckDB<br/>staging + 3 daily marts<br/>21 tests per month"]
     D --> C
-    C --> E["Investigations<br/>checks on the raw rows<br/>of unusual days"]
+    C --> E["Investigations<br/>by hand, then automatic:<br/>every unusual day"]
     E --> C
     C --> F["Quarto site<br/>on GitHub Pages"]
 ```
@@ -53,6 +64,7 @@ flowchart LR
 - **Extract** (`scripts/extract_month.py`): DuckDB reads the AWS public Parquet files straight from S3 on free GitHub runners, filters to the three tokens, keeps failed calls to the token contracts, and writes a load log. A month is uploaded only if it passes seven checks: every day present, no duplicate transfers, no missing amounts or addresses, every transfer's transaction and block present, no block gaps, no duplicate blocks.
 - **Model** (`analytics/`): dbt on DuckDB builds staging models and three daily marts per month: payments by token, amount band and route; token health (direct calls, failures, fees); and pipeline health (block gaps, duplicates, load delay). A month is published only if every test passes, including a reconciliation that the daily cube adds up to the raw transfers exactly.
 - **Investigate** (`scripts/investigate.py`): downloads only the days involved and runs the checks behind the Investigations page. Every result table is published under `investigations/` in the dataset.
+- **Watch** (`scripts/watch.py`, `twinfault/`): finds every unusual day in the marts, checks the most severe on the raw rows, and records a verdict with its evidence. The rules are plain Python in `twinfault/verdicts.py`, so every verdict can be traced to the check that produced it. Results are published under `watch/`.
 - **Publish** (`site/`): Quarto rebuilds the site from the marts and the investigation tables, and GitHub Pages hosts it. Every number on the site is computed from the published data at build time.
 
 There is no server, no database to host and no subscription. Every step is a GitHub Actions workflow you can run from the Actions tab.
@@ -65,12 +77,14 @@ There is no server, no database to host and no subscription. Every step is a Git
 | Phase 3 - build the analytics cube | Runs dbt and its tests on each month and uploads the marts |
 | Phase 3b - publish the website | Builds the dbt docs and the Quarto site and deploys them to GitHub Pages |
 | Phase 3c - investigate the unusual days | Runs the investigations and uploads their result tables |
+| Phase 4 - investigate every unusual day | Finds and checks every unusual day automatically and uploads the verdicts |
 
 ## Repository layout
 
 ```
-.github/workflows/   the six workflows above
-scripts/             extract, backfill helpers, AWS probe, investigations
+.github/workflows/   the seven workflows above
+twinfault/           episode detection, checks on the raw rows, and the verdict rules
+scripts/             extract, backfill helpers, AWS probe, investigations, watch
 analytics/           dbt project: staging models, marts, tests, docs overview
 site/                Quarto website: one .qmd per page, shared helpers in twinfault_site.py
 ```
@@ -94,9 +108,9 @@ The [dataset card](https://huggingface.co/datasets/andrew142/stablecoin-payments
 - [x] dbt models, daily marts, tests and freshness checks
 - [x] Website and dbt documentation
 - [x] Four real anomalies investigated: pipeline or business, with evidence
-- [ ] The twinfault generator: plants look-alike pairs into any day, with an answer key
-- [ ] A reference AI analyst that checks the data before blaming the business
-- [ ] The benchmark and a public leaderboard
+- [x] Every unusual day found and checked automatically, and scored against the hand investigations
+- [ ] Run the checks automatically after each new month is loaded
+- [ ] Keep a snapshot of every load, so a rewritten day can be compared with what was first published
 
 ## Data and licence
 
