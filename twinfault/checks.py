@@ -1,4 +1,7 @@
-"""The checks run on one episode, on the raw rows of its peak day and of the week before it.
+"""The checks run on one episode, on the raw rows of its peak day and of comparable ordinary days.
+
+Comparable days are the same weekday in the most recent ordinary weeks before the episode's wave, so
+weekly patterns (quiet weekends) never look like a change.
 
 Views expected on the connection:
   payments, health, pipeline   the daily marts
@@ -204,8 +207,8 @@ def transfer_facts(con, token: str, peak: str, baseline: list[str]) -> dict:
         select count(*) filter (where date = date '{peak}' and amount < 1),
                count(*) filter (where date <> date '{peak}' and amount < 1) / {nb} from t"""))
 
-    # New senders: not seen in the week before. Their usual level is measured the same way
-    # for the last day of that week, against the six days before it.
+    # New senders: not seen on any comparable day. Their usual level is measured the same way
+    # for the latest comparable day, against the other comparable days.
     last = max(baseline)
     f["new_sender_transfers"] = num(one(con, f"""
         select count(*) from t where date = date '{peak}'
@@ -222,14 +225,14 @@ def transfer_facts(con, token: str, peak: str, baseline: list[str]) -> dict:
         select avg(n) from (select date, sum(n) as n from (
             select date, sender, count(*) as n, row_number() over (partition by date order by count(*) desc) as rk
             from t where date <> date '{peak}' group by date, sender) where rk <= 10 group by date)""")[0])
-    # For a fall: how many transfers did the week's 50 busiest senders lose?
+    # For a fall: how many transfers did the 50 usually busiest senders lose?
     f["lost_from_top50"] = num(one(con, f"""
         with b as (select sender, count(*) / {nb} as usual from t where date <> date '{peak}'
                    group by sender order by usual desc limit 50),
         p as (select sender, count(*) as n from t where date = date '{peak}' group by sender)
         select sum(b.usual - coalesce(p.n, 0)) from b left join p using (sender)""")[0])
 
-    # Hours with no transfers at all, where the week before always had some.
+    # Hours with no transfers at all, where comparable days always had some.
     f["empty_hours"] = int(one(con, f"""
         with h as (select hour, count(*) filter (where date = date '{peak}') as peak,
                           count(*) filter (where date <> date '{peak}') / {nb} as usual
@@ -295,7 +298,7 @@ def units_shift(con, peak: str, baseline: list[str]) -> tuple[int | None, int | 
 
     A units change moves every part of the distribution by the same power of ten. For each
     possible cut-over hour, the 25th, 50th and 75th percentiles after it must all be exactly
-    10^k times the week before (k not 0), and before it unchanged. A real change in the mix
+    10^k times the comparable days (k not 0), and before it unchanged. A real change in the mix
     of transfers moves the percentiles by different amounts, so it does not pass.
     """
     qs = "[0.25, 0.5, 0.75]"

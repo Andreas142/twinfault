@@ -35,7 +35,7 @@ def bullets(text: str) -> str:
     return "".join(f"<li>{t}</li>" for t in items)
 ```
 
-This page is produced by [`scripts/watch.py`](https://github.com/Andreas142/twinfault/blob/main/scripts/watch.py), which is never told a date. For every token and day it scores transfers, value moved and the failure rate against the same weekday over the previous eight weeks, and groups unusual days into episodes. For the most severe episodes it reads the raw rows of the peak day and of the last seven ordinary days before it, and decides in a fixed order:
+This page is produced by [`scripts/watch.py`](https://github.com/Andreas142/twinfault/blob/main/scripts/watch.py), which is never told a date. For every token and day it scores transfers, value moved and the failure rate against the same weekday over the previous eight weeks, and groups unusual days into episodes. For each episode it reads the raw rows of the peak day and of seven comparable days (the same weekday, in the most recent ordinary weeks before the episode), and decides in a fixed order:
 
 1. **Is the data wrong?** Missing or repeated blocks, an incomplete day, repeated rows, a mart that disagrees with its raw rows, amounts that changed units, a day the source rewrote later.
 2. **If not, does one group explain the move?** One program (an exact gas fingerprint), new addresses, a few addresses, dust, the issuer minting or burning, a few very large transfers. Removing the group must bring the metric back towards normal.
@@ -89,7 +89,7 @@ HTML(html_table(table))
 ```{python}
 #| fig-cap: "Each dot is an episode, at its peak day. Coloured dots were checked on the raw rows; the size shows how far the day was from usual."
 colors = {"pipeline": "#d1495b", "doubt": "#e0a100", "bots": "#7b61c2", "few": "#2f6fd6",
-          "supply": "#1a9e77", "newcomers": "#4fb3bf", "broad": "#8a94a3"}
+          "supply": "#1a9e77", "newcomers": "#4fb3bf", "broad": "#8a94a3", "noise": "#c9d0d9"}
 eps["row"] = eps.token + " · " + eps.metric.map(METRIC)
 order = [f"{t} · {m}" for m in METRIC.values() for t in TOKENS]
 fig = go.Figure()

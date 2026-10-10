@@ -18,12 +18,13 @@ Families, as shown on the site:
   supply      the issuer created or destroyed tokens
   newcomers   many new senders, with no sign of automation
   broad       a real change across many senders
+  noise       against comparable days the move is small or points the other way
 """
 from __future__ import annotations
 
 LABELS = {"pipeline": "Pipeline", "doubt": "Data in doubt", "bots": "Bots and automation",
           "few": "A few actors", "supply": "Supply event", "newcomers": "New senders",
-          "broad": "Broad real change"}
+          "broad": "Broad real change", "noise": "No clear move"}
 EXPLAINS = 0.6       # a group explains a move if it accounts for 60% of the extra or missing amount
 RESTORED = 1.5       # without the group, the metric is back within 1.5x of usual
 
@@ -48,6 +49,14 @@ def big(n: float | None) -> str:
 def restored(without: float | None, usual: float) -> bool:
     """Without the group, is the rate back near usual? (Within 1.5x, or 0.1 points for tiny rates.)"""
     return without is not None and without <= max(RESTORED * usual, usual + 0.001)
+
+
+def moved(direction: str, extra: float) -> bool:
+    """Did the peak day really move the way the episode says, against the comparable days?
+
+    Without this, a negative "extra" would be explained by any group at all.
+    """
+    return extra > 0 if direction == "up" else extra < 0
 
 
 def verdict(family: str, title: str, evidence: list[str], confidence: str, caveats: list[str] | None = None) -> dict:
@@ -78,8 +87,8 @@ def pipeline_problems(metric: str, pf: dict, bf: dict) -> list[tuple[str, str]]:
             k, h = bf["units_shift_power"], bf["units_shift_from_hour"]
             when = "all day" if h == 0 else f"from {h:02d}:00 UTC"
             found.append((f"Units changed {when}: amounts {10 ** k:,g}× too {'large' if k > 0 else 'small'}",
-                          f"{when.capitalize()}, the typical transfer is exactly 10^{k} times the week before, while "
-                          f"the number of transfers is normal ({count_ratio:.2f}× the week before)."))
+                          f"{when[0].upper() + when[1:]}, the typical transfer is exactly 10^{k} times usual, while "
+                          f"the number of transfers is normal ({count_ratio:.2f}× usual)."))
     return found
 
 
@@ -91,6 +100,8 @@ def rewritten(pf: dict) -> bool:
 
 def explain_failures(direction: str, f: dict) -> dict | None:
     usual = f.get("usual_rate") or 0
+    if f.get("rate") is None or not moved(direction, f["rate"] - usual):
+        return None
     if direction == "down":
         absent = f.get("baseline_failures_from_absent_senders")
         if absent is not None and absent >= EXPLAINS:
@@ -99,10 +110,10 @@ def explain_failures(direction: str, f: dict) -> dict | None:
                             f"nothing that day."], "moderate")
         return None
 
-    lines = [f"Failure rate {pct(f['rate'], 2)} against {pct(usual, 2)} in the week before."]
+    lines = [f"Failure rate {pct(f['rate'], 2)} against {pct(usual, 2)} on comparable days."]
     regular_ok = restored(f.get("rate_regular"), usual)
     if f.get("share_failures_new") is not None:
-        lines.append(f"{pct(f['share_calls_new'], 0)} of calls came from addresses not seen the week before; "
+        lines.append(f"{pct(f['share_calls_new'], 0)} of calls came from addresses not seen on the comparable days; "
                      f"they failed {pct(f['rate_new'], 1)} of the time, regular senders {pct(f['rate_regular'], 2)}.")
 
     fp_share, fp_base = f.get("fingerprint_share_of_failures"), f.get("fingerprint_share_baseline") or 0
@@ -110,8 +121,8 @@ def explain_failures(direction: str, f: dict) -> dict | None:
         without = f.get("rate_without_fingerprint")
         back = restored(without, usual)
         lines.insert(0, f"{f['fingerprint_calls']:,} calls from {f['fingerprint_senders']:,} addresses used exactly "
-                        f"{f['fingerprint_gas']:,} gas ({pct(fp_share, 0)} of failed calls, {pct(fp_base, 0)} the week "
-                        f"before); without them the failure rate is {pct(without, 2)}.")
+                        f"{f['fingerprint_gas']:,} gas ({pct(fp_share, 0)} of failed calls, {pct(fp_base, 0)} on comparable "
+                        f"days); without them the failure rate is {pct(without, 2)}.")
         return verdict("bots", f"One program: failed calls share an exact gas fingerprint ({f['fingerprint_gas']:,} gas)",
                        lines, "strong" if back else "moderate")
 
@@ -139,15 +150,15 @@ def explain_failures(direction: str, f: dict) -> dict | None:
 
 def explain_transfers(direction: str, f: dict) -> dict | None:
     extra = f["transfers"] - (f.get("baseline_avg") or 0)
-    if not extra:
+    if not moved(direction, extra):
         return None
-    lines = [f"{f['transfers']:,} transfers against {f['baseline_avg']:,.0f} a day the week before ({extra:+,.0f})."]
+    lines = [f"{f['transfers']:,} transfers against {f['baseline_avg']:,.0f} on a comparable day ({extra:+,.0f})."]
     if direction == "down":
         dust_drop = (f.get("dust_baseline_avg") or 0) - (f.get("dust") or 0)
         if dust_drop >= EXPLAINS * -extra:
             return verdict("bots", "A dust wave ended: fewer transfers under 1 token",
-                           lines + [f"{f['dust']:,.0f} transfers under 1 token, against {f['dust_baseline_avg']:,.0f} a day "
-                                    f"the week before: {dust_drop / -extra:.0%} of the drop."], "strong")
+                           lines + [f"{f['dust']:,.0f} transfers under 1 token, against {f['dust_baseline_avg']:,.0f} "
+                                    f"on a comparable day: {min(dust_drop / -extra, 1):.0%} of the drop."], "strong")
         lost = f.get("lost_from_top50") or 0
         if lost >= EXPLAINS * -extra:
             return verdict("few", "The busiest senders sent much less",
@@ -155,14 +166,14 @@ def explain_transfers(direction: str, f: dict) -> dict | None:
                                     f"{lost / -extra:.0%} of the drop."], "moderate")
         if (f.get("empty_hours") or 0) >= 2:
             return verdict("doubt", "Whole hours with no transfers at all",
-                           lines + [f"{f['empty_hours']} hours had no transfers, where the week before always had some."],
+                           lines + [f"{f['empty_hours']} hours had no transfers, where comparable days always had some."],
                            "moderate")
         return None
     dust_extra = (f.get("dust") or 0) - (f.get("dust_baseline_avg") or 0)
     if dust_extra >= EXPLAINS * extra:
         return verdict("bots", "Dust: a wave of transfers under 1 token",
-                       lines + [f"{f['dust']:,.0f} transfers under 1 token, against {f['dust_baseline_avg']:,.0f} a day "
-                                f"the week before: {dust_extra / extra:.0%} of the extra transfers."], "strong")
+                       lines + [f"{f['dust']:,.0f} transfers under 1 token, against {f['dust_baseline_avg']:,.0f} "
+                                f"on a comparable day: {min(dust_extra / extra, 1):.0%} of the extra transfers."], "strong")
     top_extra = (f.get("top10_sender_transfers") or 0) - (f.get("top10_sender_transfers_baseline") or 0)
     if top_extra >= EXPLAINS * extra:
         return verdict("few", "Ten senders made most of the extra transfers",
@@ -171,16 +182,16 @@ def explain_transfers(direction: str, f: dict) -> dict | None:
     new_extra = (f.get("new_sender_transfers") or 0) - (f.get("new_sender_transfers_baseline") or 0)
     if new_extra >= EXPLAINS * extra:
         return verdict("newcomers", "New senders made most of the extra transfers",
-                       lines + [f"Addresses not seen the week before made {f['new_sender_transfers']:,.0f} transfers, "
+                       lines + [f"Addresses not seen on the comparable days made {f['new_sender_transfers']:,.0f} transfers, "
                                 f"against about {f['new_sender_transfers_baseline']:,.0f} on a usual day."], "moderate")
     return None
 
 
 def explain_volume(direction: str, f: dict) -> dict | None:
     extra = (f.get("volume") or 0) - (f.get("baseline_avg") or 0)
-    if not extra:
+    if not moved(direction, extra):
         return None
-    lines = [f"{big(f['volume'])} moved against {big(f['baseline_avg'])} a day the week before."]
+    lines = [f"{big(f['volume'])} moved against {big(f['baseline_avg'])} on a comparable day."]
     if direction == "down":
         missing = (f.get("top10_transfer_volume_baseline") or 0) - (f.get("top10_transfer_volume") or 0)
         if missing >= EXPLAINS * -extra:
@@ -195,7 +206,7 @@ def explain_volume(direction: str, f: dict) -> dict | None:
         return verdict("supply", "The issuer minted and burned tokens",
                        lines + [f"Minted {big(f['minted'])} and burned {big(f['burned'])} (from and to the zero address).",
                                 f"Transfers between holders moved {big(f['between_holders'])}"
-                                + (f", {holders_ratio:.2f}× the week before." if holders_ratio else ".")],
+                                + (f", {holders_ratio:.2f}× a comparable day." if holders_ratio else ".")],
                        "strong" if holders_ratio is not None and holders_ratio <= 2 else "moderate")
     for side, verb in (("sender", "sent"), ("receiver", "received")):
         side_extra = (f.get(f"top10_{side}_volume") or 0) - (f.get(f"top10_{side}_volume_baseline") or 0)
@@ -229,13 +240,14 @@ def context_lines(metric: str, direction: str, token: str, cf: dict) -> tuple[li
         if t != token and r is not None and ((direction == "up" and r >= m) or (direction == "down" and r <= 1 / m)):
             together.append(f"{t} {r:.2f}×")
     if together:
-        lines.append(f"Other stablecoins moved the same way that day: {', '.join(together)} the week before.")
+        lines.append(f"Other stablecoins moved the same way that day: {', '.join(together)} their comparable days.")
     if cf.get("fee_ratio") and (cf["fee_ratio"] >= 2 or cf["fee_ratio"] <= 0.5):
-        lines.append(f"The network's average fee was {cf['fee_ratio']:.1f}× the week before: "
+        lines.append(f"The network's average fee was {cf['fee_ratio']:.1f}× a comparable day: "
                      f"{'a busy' if cf['fee_ratio'] >= 2 else 'a quiet'} day for all of Ethereum.")
     if cf.get("segment_share") is not None and abs(cf["segment_share"]) >= 0.5:
-        lines.append(f"{cf['segment_share']:.0%} of the change came from transfers {cf['segment_band']} tokens, "
-                     f"{cf['segment_route'].replace('via contract', 'through other contracts')}.")
+        route = "sent straight to the token contract" if cf["segment_route"] == "direct" else "through other contracts"
+        lines.append(f"{min(cf['segment_share'], 1):.0%} of the change came from transfers of {cf['segment_band']} "
+                     f"tokens, {route}.")
     return lines, together
 
 
@@ -246,6 +258,13 @@ def decide(metric: str, direction: str, pf: dict, bf: dict, cf: dict | None = No
     if problems:
         return verdict("pipeline", "; ".join(t for t, _ in problems), [e for _, e in problems], "strong")
 
+    gap = {"failure_rate": lambda: (bf.get("rate") or 0) - (bf.get("usual_rate") or 0),
+           "transfers": lambda: bf["transfers"] - (bf.get("baseline_avg") or 0),
+           "volume": lambda: (bf.get("volume") or 0) - (bf.get("baseline_avg") or 0)}[metric]()
+    if not moved(direction, gap):
+        return verdict("noise", "No clear move against comparable days",
+                       [f"Compared with the same weekday in ordinary weeks before, the peak day is not {direction}: "
+                        f"the episode was most likely ordinary variation."], "moderate")
     explain = {"failure_rate": explain_failures, "transfers": explain_transfers, "volume": explain_volume}[metric]
     found = explain(direction, bf)
     caveats = []

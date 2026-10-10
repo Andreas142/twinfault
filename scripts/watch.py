@@ -117,18 +117,23 @@ def wave_start(ep: pd.Series, eps: pd.DataFrame) -> pd.Timestamp:
 
 
 def needed(ep: pd.Series, days: pd.DataFrame, flagged: set[str], eps: pd.DataFrame) -> dict[str, list[str]]:
-    """The raw days an episode needs: its peak day, and the last 7 ordinary days before its wave began.
+    """The raw days an episode needs: its peak day, and 7 comparable days.
 
-    Ordinary means that metric and token were not unusual that day and the pipeline flagged
-    nothing, so an earlier wave never becomes part of "usual".
+    Comparable days are the same weekday as the peak, in the most recent ordinary weeks
+    before its wave began: that metric and token were not unusual and the pipeline flagged
+    nothing. The weekday matches how unusual days are found, so a busy Saturday is compared
+    with other Saturdays, and an earlier wave never becomes part of "usual".
     """
     start = wave_start(ep, eps)
+    weekday = pd.Timestamp(ep.peak_date).dayofweek
     quiet = days[(days.metric == ep.metric) & (days.token == ep.token) & (days.date < start)
-                 & (days.date >= start - pd.Timedelta(days=120)) & (days.score.abs() < 3)]
+                 & (days.date >= start - pd.Timedelta(days=180)) & (days.score.abs() < 3)
+                 & (days.date.dt.dayofweek == weekday)]
     dates = [d.strftime("%Y-%m-%d") for d in quiet.date if d.strftime("%Y-%m-%d") not in flagged]
     baseline = dates[-BASELINE_DAYS:]
-    if len(baseline) < 3:  # too early in the data: fall back to the week before
-        baseline = [(start - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(BASELINE_DAYS, 0, -1)]
+    if len(baseline) < 3:  # too early in the data: fall back to the same weekday in the weeks before
+        last = start - pd.Timedelta(days=(start.dayofweek - weekday) % 7 or 7)
+        baseline = [(last - pd.Timedelta(weeks=i)).strftime("%Y-%m-%d") for i in range(BASELINE_DAYS - 1, -1, -1)]
     peak = pd.Timestamp(ep.peak_date).strftime("%Y-%m-%d")
     return {"peak": peak, "baseline": baseline, "folder": RAW[ep.metric], "wave_start": start.strftime("%Y-%m-%d")}
 

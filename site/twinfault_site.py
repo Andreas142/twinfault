@@ -185,6 +185,7 @@ FAMILIES = {
     "supply": ("Supply event", "fam-supply", "The issuer created or destroyed tokens."),
     "newcomers": ("New senders", "fam-newcomers", "Many new senders, with no sign of automation."),
     "broad": ("Broad real change", "fam-broad", "Real, and spread across many senders; the data alone does not say why."),
+    "noise": ("No clear move", "fam-noise", "Against the same weekday in ordinary weeks, the day was not really unusual."),
 }
 
 
