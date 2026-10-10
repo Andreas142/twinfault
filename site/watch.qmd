@@ -51,7 +51,7 @@ This page is produced by [`scripts/watch.py`](https://github.com/Andreas142/twin
 ::: {.stat}
 [`{python} f"{len(done):,}"`]{.num}
 
-[most severe, checked on the raw rows]{.lbl}
+[`{python} "checked on the raw rows" if len(done) == len(eps) else "most severe, checked on the raw rows"`]{.lbl}
 :::
 
 ::: {.stat}
@@ -141,4 +141,4 @@ print(f'<div class="real-twin"><p><b>How to read the verdicts.</b></p><ul class=
       f'as on the <a href="investigations.html">Investigations</a> page.</p></div>')
 ```
 
-Only the `{python} len(done)` most severe of `{python} len(eps)` episodes are checked on the raw rows, to keep each run within free limits. Every table behind this page is published in [`watch/`](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth/tree/main/watch) on Hugging Face, including every fact behind every verdict.
+`{python} f"All {len(eps)} episodes were checked on the raw rows." if len(done) == len(eps) else f"Only the {len(done)} most severe of {len(eps)} episodes are checked on the raw rows, to keep each run within free limits."` Every table behind this page is published in [`watch/`](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth/tree/main/watch) on Hugging Face, including every fact behind every verdict.
