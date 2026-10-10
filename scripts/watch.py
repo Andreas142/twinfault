@@ -100,10 +100,19 @@ def raw_views(con: duckdb.DuckDBPyConnection, data: Path, days: list[str]) -> No
             con.execute(f"create or replace view {name} as select {EMPTY[name]} where false")
 
 
-def needed(ep: pd.Series) -> dict[str, list[str]]:
-    """The raw days an episode needs: its peak day and the week before the episode began."""
+def needed(ep: pd.Series, days: pd.DataFrame, flagged: set[str]) -> dict[str, list[str]]:
+    """The raw days an episode needs: its peak day, and the last 7 ordinary days before it began.
+
+    Ordinary means that metric and token were not unusual that day and the pipeline flagged
+    nothing, so an earlier wave never becomes part of "usual".
+    """
     start = pd.Timestamp(ep.start)
-    baseline = [(start - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(BASELINE_DAYS, 0, -1)]
+    quiet = days[(days.metric == ep.metric) & (days.token == ep.token) & (days.date < start)
+                 & (days.date >= start - pd.Timedelta(days=90)) & (days.score.abs() < 3)]
+    dates = [d.strftime("%Y-%m-%d") for d in quiet.date if d.strftime("%Y-%m-%d") not in flagged]
+    baseline = dates[-BASELINE_DAYS:]
+    if len(baseline) < 3:  # too early in the data: fall back to the week before
+        baseline = [(start - pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(BASELINE_DAYS, 0, -1)]
     peak = pd.Timestamp(ep.peak_date).strftime("%Y-%m-%d")
     return {"peak": peak, "baseline": baseline, "folder": RAW[ep.metric]}
 
@@ -121,14 +130,16 @@ def investigate(con, ep: pd.Series, plan: dict) -> tuple[dict, dict]:
     behaviour = {"failure_rate": checks.failure_facts, "transfers": checks.transfer_facts,
                  "volume": checks.volume_facts}[ep.metric]
     bf = behaviour(con, ep.token, peak, baseline)
-    return verdicts.decide(ep.metric, ep.direction, pf, bf), {"pipeline": pf, "behaviour": bf}
+    cf = checks.context_facts(con, ep.metric, ep.token, peak, baseline)
+    return (verdicts.decide(ep.metric, ep.direction, pf, bf, cf, ep.token),
+            {"pipeline": pf, "behaviour": bf, "context": cf, "baseline_days": baseline})
 
 
 # ------------------------------------------------------------------ report
 
 def move(row) -> str:
     if row.metric == "failure_rate":
-        return f"{100 * row.peak_value:.2f}% vs {100 * row.peak_usual:.2f}%"
+        return f"{verdicts.pct(row.peak_value, 2)} vs {verdicts.pct(row.peak_usual, 2)}"
     ratio = f"{verdicts.big(row.peak_ratio)}×" if row.peak_ratio >= 1000 else f"{row.peak_ratio:.2f}×"
     return f"{verdicts.big(row.peak_value)} vs {verdicts.big(row.peak_usual)} ({ratio})"
 
@@ -229,7 +240,8 @@ def main() -> int:
         con.execute(f"create view {view} as select * from "
                     f"read_parquet('{data}/marts/{mart}/*/*.parquet', hive_partitioning = false)")
 
-    _, eps, flagged = episodes.find(con)
+    days, eps, flagged = episodes.find(con)
+    flagged_days = set(flagged.date.dt.strftime("%Y-%m-%d"))
     print(f"{len(eps)} episodes; investigating the {min(args.max_episodes, len(eps))} most severe")
     eps["investigated"] = False
     for col in ("family", "label", "title", "confidence"):
@@ -238,7 +250,7 @@ def main() -> int:
     eps["caveats"] = [[] for _ in range(len(eps))]
 
     chosen = list(eps.index[: args.max_episodes])
-    plans = {i: needed(eps.loc[i]) for i in chosen}
+    plans = {i: needed(eps.loc[i], days, flagged_days) for i in chosen}
     # Work through episodes in date order, so overlapping weeks are downloaded once.
     order = sorted(chosen, key=lambda i: plans[i]["peak"])
     facts = {}
@@ -262,7 +274,7 @@ def main() -> int:
             for folder, day in files_for(plan) - later:
                 shutil.rmtree(data / folder / f"date={day}", ignore_errors=True)
 
-    inv = eps[eps.investigated].sort_values("peak_score", key=abs, ascending=False)
+    inv = eps[eps.investigated].sort_values("severity", ascending=False)
     agree_md, agree_rows = agreement(eps, flagged)
 
     save = eps.drop(columns=["day_list", "pipeline_flagged_days"], errors="ignore").copy()

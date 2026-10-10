@@ -378,3 +378,37 @@ a.eth code:not(.sourceCode) {
     color: #6b7685;
   }
 }
+
+// Every unusual day: verdict families
+.fam {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.08rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.fam-pipeline  { background: #fdecee; color: #a3283a; border-color: #f4c6cd; }
+.fam-doubt     { background: #fff6dc; color: #7a5a00; border-color: #f1df9e; }
+.fam-bots      { background: #f2edfb; color: #57409a; border-color: #dcd1f3; }
+.fam-few       { background: #e8f1fd; color: #1d4f9e; border-color: #c4d8f5; }
+.fam-supply    { background: #e3f5ee; color: #13684f; border-color: #bfe6d6; }
+.fam-newcomers { background: #e6f6f8; color: #1f6f78; border-color: #c2e7ec; }
+.fam-broad     { background: #eef1f5; color: #46505e; border-color: #dbe1e8; }
+.fam-row { line-height: 2.1; }
+.fam-legend { list-style: none; padding-left: 0; margin: 0.4rem 0 0.6rem; }
+.fam-legend li { margin: 0.25rem 0; }
+.ep-list { border-top: 1px solid #e3e8ef; margin: 0.6rem 0 1.6rem; }
+.ep { border-bottom: 1px solid #e3e8ef; padding: 0.6rem 0.2rem; }
+.ep-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.8rem; }
+.ep-date { font-variant-numeric: tabular-nums; color: #6b7685; font-size: 0.86rem; min-width: 6.4rem; }
+.ep-what { flex: 1 1 18rem; font-size: 0.92rem; }
+.ep details { margin: 0.25rem 0 0 7.2rem; }
+.ep details summary { cursor: pointer; color: #16202e; font-size: 0.92rem; }
+.ep details ul { margin: 0.35rem 0 0.2rem; padding-left: 1.1rem; color: #3d4756; font-size: 0.86rem; }
+.ep details li { margin: 0.15rem 0; }
+.ep details .note { margin: 0.3rem 0 0; font-size: 0.8rem; color: #6b7685; }
+@media (max-width: 640px) {
+  .ep details { margin-left: 0; }
+}

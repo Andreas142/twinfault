@@ -29,7 +29,11 @@ RESTORED = 1.5       # without the group, the metric is back within 1.5x of usua
 
 
 def pct(x: float | None, digits: int = 1) -> str:
-    return "–" if x is None else f"{100 * x:.{digits}f}%"
+    if x is None:
+        return "–"
+    if 0 < abs(x) < 0.001:
+        return f"{100 * x:.2g}%"
+    return f"{100 * x:.{digits}f}%"
 
 
 def big(n: float | None) -> str:
@@ -127,6 +131,9 @@ def explain_failures(direction: str, f: dict) -> dict | None:
     if (f.get("top10_share_of_failures") or 0) >= EXPLAINS:
         lines.insert(0, f"10 addresses made {pct(f['top10_share_of_failures'], 0)} of all failures.")
         return verdict("few", "Ten addresses made most of the failures", lines, "moderate")
+    if f.get("rate_regular") is not None and f["rate_regular"] >= RESTORED * usual \
+            and (f.get("share_failures_new") or 0) < 0.5:
+        return verdict("broad", "Regular senders failed more too: not a new group, but most users", lines, "moderate")
     return None
 
 
@@ -136,6 +143,11 @@ def explain_transfers(direction: str, f: dict) -> dict | None:
         return None
     lines = [f"{f['transfers']:,} transfers against {f['baseline_avg']:,.0f} a day the week before ({extra:+,.0f})."]
     if direction == "down":
+        dust_drop = (f.get("dust_baseline_avg") or 0) - (f.get("dust") or 0)
+        if dust_drop >= EXPLAINS * -extra:
+            return verdict("bots", "A dust wave ended: fewer transfers under 1 token",
+                           lines + [f"{f['dust']:,.0f} transfers under 1 token, against {f['dust_baseline_avg']:,.0f} a day "
+                                    f"the week before: {dust_drop / -extra:.0%} of the drop."], "strong")
         lost = f.get("lost_from_top50") or 0
         if lost >= EXPLAINS * -extra:
             return verdict("few", "The busiest senders sent much less",
@@ -185,6 +197,13 @@ def explain_volume(direction: str, f: dict) -> dict | None:
                                 f"Transfers between holders moved {big(f['between_holders'])}"
                                 + (f", {holders_ratio:.2f}× the week before." if holders_ratio else ".")],
                        "strong" if holders_ratio is not None and holders_ratio <= 2 else "moderate")
+    for side, verb in (("sender", "sent"), ("receiver", "received")):
+        side_extra = (f.get(f"top10_{side}_volume") or 0) - (f.get(f"top10_{side}_volume_baseline") or 0)
+        if side_extra >= EXPLAINS * extra:
+            return verdict("few", f"Ten addresses {verb} most of the extra value",
+                           lines + [f"The day's 10 biggest {side}s {verb} {big(f[f'top10_{side}_volume'])}, against "
+                                    f"{big(f[f'top10_{side}_volume_baseline'])} for the biggest 10 on a usual day: "
+                                    f"{side_extra / extra:.0%} of the extra value."], "strong")
     top_extra = (f.get("top10_transfer_volume") or 0) - (f.get("top10_transfer_volume_baseline") or 0)
     if top_extra >= EXPLAINS * extra:
         rest = (f.get("volume") or 0) - (f.get("top10_transfer_volume") or 0)
@@ -197,9 +216,32 @@ def explain_volume(direction: str, f: dict) -> dict | None:
     return None
 
 
+# ------------------------------------------------------------------ context
+
+MOVES = {"transfers": 1.3, "volume": 1.5, "failure_rate": 1.5}
+
+
+def context_lines(metric: str, direction: str, token: str, cf: dict) -> tuple[list[str], list[str]]:
+    """Evidence about the day around the episode, and the other tokens that moved the same way."""
+    lines, together = [], []
+    m = MOVES[metric]
+    for t, r in sorted((cf.get("token_ratios") or {}).items()):
+        if t != token and r is not None and ((direction == "up" and r >= m) or (direction == "down" and r <= 1 / m)):
+            together.append(f"{t} {r:.2f}×")
+    if together:
+        lines.append(f"Other stablecoins moved the same way that day: {', '.join(together)} the week before.")
+    if cf.get("fee_ratio") and (cf["fee_ratio"] >= 2 or cf["fee_ratio"] <= 0.5):
+        lines.append(f"The network's average fee was {cf['fee_ratio']:.1f}× the week before: "
+                     f"{'a busy' if cf['fee_ratio'] >= 2 else 'a quiet'} day for all of Ethereum.")
+    if cf.get("segment_share") is not None and abs(cf["segment_share"]) >= 0.5:
+        lines.append(f"{cf['segment_share']:.0%} of the change came from transfers {cf['segment_band']} tokens, "
+                     f"{cf['segment_route'].replace('via contract', 'through other contracts')}.")
+    return lines, together
+
+
 # ------------------------------------------------------------------ decide
 
-def decide(metric: str, direction: str, pf: dict, bf: dict) -> dict:
+def decide(metric: str, direction: str, pf: dict, bf: dict, cf: dict | None = None, token: str = "") -> dict:
     problems = pipeline_problems(metric, pf, bf)
     if problems:
         return verdict("pipeline", "; ".join(t for t, _ in problems), [e for _, e in problems], "strong")
@@ -213,11 +255,17 @@ def decide(metric: str, direction: str, pf: dict, bf: dict) -> dict:
         if metric == "failure_rate" and pf.get("pct_failed_rows_late") is not None \
                 and abs(pf["pct_failed_rows_late"] - pf["pct_rows_late"]) < 10:
             caveats.append("Failed and successful rows were rewritten alike, so the rewrite did not create the failures.")
+    context, together = context_lines(metric, direction, token, cf or {})
     if found:
+        found["evidence"] += context
         found["caveats"] = caveats
         return found
     if caveats:
-        return verdict("doubt", "The source rewrote this day, and no group explains the move", caveats, "moderate")
+        return verdict("doubt", "The source rewrote this day, and no group explains the move", caveats + context,
+                       "moderate")
+    if together:
+        return verdict("broad", "Market-wide: the other stablecoins moved the same way",
+                       ["No pipeline problem, and no single group explains the move."] + context, "moderate")
     return verdict("broad", "Many senders moved together; no single group explains it",
-                   ["No pipeline problem, and no group of senders, transfers or tokens accounts for most of the move."],
-                   "moderate")
+                   ["No pipeline problem, and no group of senders, transfers or tokens accounts for most of the move."]
+                   + context, "moderate")

@@ -1,0 +1,143 @@
+---
+title: "Every unusual day"
+subtitle: "Found and checked automatically: the pipeline first, then the behaviour behind each move."
+---
+
+```{python}
+#| include: false
+import html
+
+import pandas as pd
+import plotly.graph_objects as go
+from IPython.display import HTML
+from twinfault_site import *
+
+eps = watch("episodes")
+flagged = watch("pipeline_days")
+agree = watch_agreement()
+done = eps[eps.investigated].copy()
+agreed = sum(a["agrees"] for a in agree)
+METRIC = {"failure_rate": "failure rate", "transfers": "transfers", "volume": "value moved"}
+
+
+def move(r) -> str:
+    if r.metric == "failure_rate":
+        def p(x):
+            return f"{100 * x:.2g}%" if 0 < x < 0.001 else f"{100 * x:.2f}%"
+        return f"{p(r.peak_value)} vs {p(r.peak_usual)}"
+    ratio = f"{compact(r.peak_ratio)}×" if r.peak_ratio >= 1000 else f"{r.peak_ratio:.2f}×"
+    return f"{compact(r.peak_value)} vs {compact(r.peak_usual)} ({ratio})"
+
+
+def bullets(text: str) -> str:
+    items = [html.escape(t) for t in (text or "").split(" | ") if t]
+    return "".join(f"<li>{t}</li>" for t in items)
+```
+
+This page is produced by [`scripts/watch.py`](https://github.com/Andreas142/twinfault/blob/main/scripts/watch.py), which is never told a date. For every token and day it scores transfers, value moved and the failure rate against the same weekday over the previous eight weeks, and groups unusual days into episodes. For the most severe episodes it reads the raw rows of the peak day and of the last seven ordinary days before it, and decides in a fixed order:
+
+1. **Is the data wrong?** Missing or repeated blocks, an incomplete day, repeated rows, a mart that disagrees with its raw rows, amounts that changed units, a day the source rewrote later.
+2. **If not, does one group explain the move?** One program (an exact gas fingerprint), new addresses, a few addresses, dust, the issuer minting or burning, a few very large transfers. Removing the group must bring the metric back towards normal.
+3. **If no group does, the change is broad**, and the page says so rather than inventing a reason.
+
+::: {.stat-grid}
+::: {.stat}
+[`{python} f"{len(eps):,}"`]{.num}
+
+[episodes of unusual days found]{.lbl}
+:::
+
+::: {.stat}
+[`{python} f"{len(done):,}"`]{.num}
+
+[most severe, checked on the raw rows]{.lbl}
+:::
+
+::: {.stat}
+[`{python} f"{len(flagged):,}"`]{.num}
+
+[days the pipeline checks flag on their own]{.lbl}
+:::
+
+::: {.stat}
+[`{python} f"{agreed} of {len(agree)}"`]{.num}
+
+[hand investigations matched]{.lbl}
+:::
+:::
+
+## Does it agree with the investigations done by hand?
+
+The four cases on the [Investigations](investigations.html) page were worked out by hand. The automatic rules never see them; they are only used afterwards, to score what the rules decided on their own.
+
+```{python}
+table = pd.DataFrame({
+    "Case": [a["case"] for a in agree],
+    "Token": [a["token"] for a in agree],
+    "Found on its own": ["yes" if a["found"] else "no" for a in agree],
+    "Automatic verdict": [a["verdict"] or "–" for a in agree],
+    "Verdict by hand": [a["hand_verdict"] for a in agree],
+    "Same kind": ['<span class="pill pill-ok">Yes</span>' if a["agrees"] else '<span class="pill pill-bad">No</span>'
+                  for a in agree],
+})
+HTML(html_table(table))
+```
+
+## When they happened
+
+```{python}
+#| fig-cap: "Each dot is an episode, at its peak day. Coloured dots were checked on the raw rows; the size shows how far the day was from usual."
+colors = {"pipeline": "#d1495b", "doubt": "#e0a100", "bots": "#7b61c2", "few": "#2f6fd6",
+          "supply": "#1a9e77", "newcomers": "#4fb3bf", "broad": "#8a94a3"}
+eps["row"] = eps.token + " · " + eps.metric.map(METRIC)
+order = [f"{t} · {m}" for m in METRIC.values() for t in TOKENS]
+fig = go.Figure()
+rest = eps[~eps.investigated]
+fig.add_scatter(x=rest.peak_date, y=rest.row, mode="markers", name="not checked",
+                marker=dict(color="#d5dbe3", size=6), hovertemplate="%{x|%d %b %Y}<extra>not checked</extra>")
+for fam, (label, _, _) in FAMILIES.items():
+    d = eps[eps.investigated & (eps.family == fam)]
+    if d.empty:
+        continue
+    fig.add_scatter(x=d.peak_date, y=d.row, mode="markers", name=label,
+                    marker=dict(color=colors[fam], size=(d.severity.clip(upper=40) ** 0.5) * 2.2 + 4,
+                                line=dict(color="white", width=1)),
+                    customdata=d[["title"]], hovertemplate="%{x|%d %b %Y}: %{customdata[0]}<extra></extra>")
+fig.update_yaxes(categoryorder="array", categoryarray=order[::-1], tickfont=dict(color=INK))
+fig.update_layout(hovermode="closest", legend=dict(y=1.08))
+show(fig, height=430)
+```
+
+## What the checks found
+
+Newest first. Click a finding to see its evidence.
+
+```{python}
+#| output: asis
+counts = done.family.value_counts()
+pills = " ".join(f"{family_pill(f)} {n}" for f, n in counts.items())
+print(f'<p class="fam-row">{pills}</p>')
+cards = []
+for _, r in done.sort_values("peak_date", ascending=False).iterrows():
+    days = f"{r.days} days" if r.days > 1 else "1 day"
+    caveats = bullets(r.caveats)
+    cards.append(
+        f'<div class="ep"><div class="ep-head"><span class="ep-date">{r.peak_date:%d %b %Y}</span>'
+        f'<span class="ep-what"><b>{r.token}</b> {METRIC[r.metric]} {r.direction} · {days} · {move(r)}</span>'
+        f'{family_pill(r.family)}</div>'
+        f'<details><summary>{html.escape(r.title)}</summary><ul>{bullets(r.evidence)}</ul>'
+        + (f'<p class="note">Caveats</p><ul>{caveats}</ul>' if caveats else "")
+        + f'<p class="note">Confidence: {r.confidence}</p></details></div>')
+print('<div class="ep-list">' + "".join(cards) + "</div>")
+```
+
+```{python}
+#| output: asis
+items = "".join(f"<li>{family_pill(f)} {html.escape(meaning)}</li>" for f, (_, _, meaning) in FAMILIES.items())
+print(f'<div class="real-twin"><p><b>How to read the verdicts.</b></p><ul class="fam-legend">{items}</ul>'
+      f'<p>Confidence is <i>strong</i> when removing the group brings the metric back near its usual level, and '
+      f'<i>moderate</i> otherwise. A verdict says what the data shows, not why people did it: that needs other sources, '
+      f'as on the <a href="investigations.html">Investigations</a> page.</p></div>')
+```
+
+Only the `{python} len(done)` most severe of `{python} len(eps)` episodes are checked on the raw rows, to keep each run within free limits. Every table behind this page is published in [`watch/`](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth/tree/main/watch) on Hugging Face, including every fact behind every verdict.

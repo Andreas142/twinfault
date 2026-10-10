@@ -22,6 +22,8 @@ website:
         text: Data health
       - href: investigations.qmd
         text: Investigations
+      - href: watch.qmd
+        text: Unusual days
     right:
       - text: dbt docs
         href: dbt/index.html

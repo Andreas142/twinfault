@@ -156,6 +156,43 @@ def inv(name: str) -> pd.DataFrame:
     return df
 
 
+WATCH = MARTS.parent / "watch"
+
+
+def watch(name: str) -> pd.DataFrame:
+    """One result table of scripts/watch.py, the automatic investigation of every unusual day."""
+    path = WATCH / f"{name}.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is missing: run the 'Phase 4 - investigate every unusual day' workflow first")
+    df = _con.execute(f"select * from read_parquet('{path.as_posix()}')").df()
+    for col in df.columns:
+        if isinstance(df[col].dtype, pd.DatetimeTZDtype):
+            df[col] = df[col].dt.tz_convert(None)
+    return df
+
+
+def watch_agreement() -> list[dict]:
+    """How the automatic verdicts compare with the investigations done by hand."""
+    return json.loads((WATCH / "agreement.json").read_text())
+
+
+FAMILIES = {
+    # family: (label, css class, one-line meaning)
+    "pipeline": ("Pipeline", "fam-pipeline", "The rows themselves are wrong: missing, repeated, incomplete or in the wrong units."),
+    "doubt": ("Data in doubt", "fam-doubt", "The source rewrote the day later; its numbers may have changed."),
+    "bots": ("Bots and automation", "fam-bots", "One program, a fleet of new addresses, or a dust wave."),
+    "few": ("A few actors", "fam-few", "A handful of addresses or transfers made most of the move."),
+    "supply": ("Supply event", "fam-supply", "The issuer created or destroyed tokens."),
+    "newcomers": ("New senders", "fam-newcomers", "Many new senders, with no sign of automation."),
+    "broad": ("Broad real change", "fam-broad", "Real, and spread across many senders; the data alone does not say why."),
+}
+
+
+def family_pill(family: str) -> str:
+    label, css, _ = FAMILIES.get(family, (family, "fam-broad", ""))
+    return f'<span class="fam {css}">{label}</span>'
+
+
 def etherscan(value: str, kind: str = "tx") -> str:
     """A short link to a transaction or address on Etherscan."""
     return f'<a class="eth" href="https://etherscan.io/{kind}/{value}" target="_blank"><code>{value[:8]}…{value[-6:]}</code></a>'

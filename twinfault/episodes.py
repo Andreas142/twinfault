@@ -10,6 +10,8 @@ Nothing here knows about any particular date: the investigator finds its own cas
 """
 from __future__ import annotations
 
+import math
+
 import duckdb
 import pandas as pd
 
@@ -23,6 +25,7 @@ METRICS = {
     "failure_rate": ("select date, token, failure_rate as value, direct_calls::double as calls, "
                      "failed_calls::double as failed from health where direct_calls >= 500", 2.0),
 }
+FLOOR = {"transfers": 1.0, "volume": 1.0, "failure_rate": 1e-4}   # log of zero: count it as this small
 MIN_SCORE = 5.0       # robust standard deviations
 MIN_SPREAD = 0.05     # floor on the spread, in log units, so a very stable series does not flag 2% moves
 WEEKS = 8
@@ -30,11 +33,12 @@ WEEKS = 8
 
 def scored_days(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """Every metric, token and day with its usual level and score."""
-    parts = " union all ".join(f"select '{m}' as metric, * from ({sql})" for m, (sql, _) in METRICS.items())
+    parts = " union all ".join(f"select '{m}' as metric, {FLOOR[m]}::double as floor, * from ({sql})"
+                               for m, (sql, _) in METRICS.items())
     return con.execute(f"""
         with daily as ({parts}),
         logged as (
-            select *, ln(greatest(value, 1e-12)) as lv from daily where value is not null
+            select *, ln(greatest(value, floor)) as lv from daily where value is not null
         ),
         scored as (
             select *, median(lv) over w as usual_lv, mad(lv) over w as mad_lv, count(*) over w as history
@@ -68,21 +72,22 @@ def group(flags: pd.DataFrame) -> pd.DataFrame:
     """Consecutive unusual days of one metric, token and direction become one episode."""
     if flags.empty:
         return pd.DataFrame(columns=["episode_id", "metric", "token", "direction", "start", "end", "days",
-                                     "peak_date", "peak_value", "peak_usual", "peak_ratio", "peak_score"])
+                                     "peak_date", "peak_value", "peak_usual", "peak_ratio", "peak_score", "severity"])
     rows = []
     for (metric, token, direction), g in flags.sort_values("date").groupby(["metric", "token", "direction"]):
         run = (g.date.diff().dt.days.fillna(99) > 2).cumsum()
         for _, e in g.groupby(run):
-            peak = e.loc[e.score.abs().idxmax()]
+            # The peak is the day with the biggest move; severity (for ordering) is the highest score.
+            peak = e.loc[e.ratio.map(lambda r: abs(math.log(r)) if r > 0 else 0).idxmax()]
             start, end = e.date.min(), e.date.max()
             rows.append({
                 "episode_id": f"{metric}-{token}-{direction}-{start:%Y-%m-%d}",
                 "metric": metric, "token": token, "direction": direction,
                 "start": start, "end": end, "days": len(e), "day_list": [d.strftime("%Y-%m-%d") for d in e.date],
                 "peak_date": peak.date, "peak_value": peak.value, "peak_usual": peak.usual,
-                "peak_ratio": peak.ratio, "peak_score": peak.score,
+                "peak_ratio": peak.ratio, "peak_score": peak.score, "severity": e.score.abs().max(),
             })
-    return pd.DataFrame(rows).sort_values("peak_score", key=abs, ascending=False).reset_index(drop=True)
+    return pd.DataFrame(rows).sort_values("severity", ascending=False).reset_index(drop=True)
 
 
 def pipeline_days(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:

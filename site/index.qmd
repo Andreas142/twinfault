@@ -25,11 +25,11 @@ tests_note = "dbt tests passed by every month" if tests else "tests on every mon
 ```
 
 ::: {.hero .column-page}
-[Open benchmark · work in progress]{.kicker}
+[Open project · real data, checked automatically]{.kicker}
 
 # Is it the business, or the pipeline?
 
-[When a payments metric suddenly moves, the first question is whether customers changed or the data did. A late file or a duplicated load can look exactly like a real drop. **twinfault** is an open benchmark that tests whether AI analysts can tell the two apart, built on every USDT, USDC and PYUSD transfer on Ethereum since January 2024.]{.lead}
+[When a payments metric suddenly moves, the first question is whether customers changed or the data did. A late file or a duplicated load can look exactly like a real drop. **twinfault** finds every unusual day in every USDT, USDC and PYUSD transfer on Ethereum since January 2024, checks the pipeline first, and decides with evidence which it was.]{.lead}
 :::
 
 ::: {.stat-grid .column-page}
@@ -83,9 +83,9 @@ show(fig, height=340)
 ```
 :::
 
-## The idea: look-alike pairs
+## The look-alike pairs
 
-Every scenario comes as a pair of twins that move the headline metric the same way. One twin is a pipeline fault; the other is a real business change. The metric alone cannot separate them, so an AI analyst has to find the evidence. A pair counts as solved only if both twins are diagnosed correctly, so an agent that always blames the data, or always blames the business, scores zero.
+Every metric move has two possible explanations that look the same on a dashboard: a pipeline fault, or a real change in behaviour. The metric alone cannot separate them; the rows can. The table lists the pairs and the evidence that separates them. Most of these checks run automatically on [every unusual day](watch.html).
 
 ::: {.twins .tf-scroll}
 | Pipeline fault | Business twin | Same headline effect | Evidence that separates them |
@@ -121,6 +121,7 @@ Telling cases like this apart, before anyone explains them, is what twinfault te
   <a class="tile" href="payments.html"><h4>Payments</h4><p>Daily transfers and value by token, transfer size and route.</p></a>
   <a class="tile" href="failures.html"><h4>Failures &amp; fees</h4><p>The on-chain approval rate: failed calls, fees and the unusual days.</p></a>
   <a class="tile" href="data-health.html"><h4>Data health</h4><p>Block gaps, duplicates and load delays, checked before any explanation.</p></a>
+  <a class="tile" href="watch.html"><h4>Unusual days</h4><p>Every unusual day, found and checked automatically, with its verdict and evidence.</p></a>
   <a class="tile" href="investigations.html"><h4>Investigations</h4><p>Four real anomalies, each checked against the pipeline first, then explained.</p></a>
   <a class="tile" href="dbt/index.html"><h4>dbt docs</h4><p>Lineage, model and column descriptions, and every test.</p></a>
   <a class="tile" href="https://huggingface.co/datasets/andrew142/stablecoin-payments-eth"><h4>Dataset</h4><p>The four source tables and the daily marts, free on Hugging Face.</p></a>
@@ -156,7 +157,7 @@ print(f'<div class="flow column-page">{cells}</div>')
 - [Done]{.badge-done} dbt models, daily marts, tests and freshness checks
 - [Done]{.badge-done} This website and the dbt documentation
 - [Done]{.badge-done} Four real anomalies investigated: pipeline or business, with evidence
-- [Next]{.badge-next} The twinfault generator: plants look-alike pairs into any table
-- [Next]{.badge-next} A reference AI analyst that checks the data before blaming the business
-- [Next]{.badge-next} The benchmark and a public leaderboard
+- [Done]{.badge-done} Every unusual day found and checked automatically, and scored against the hand investigations
+- [Next]{.badge-next} Run the checks automatically after each new month is loaded
+- [Next]{.badge-next} Keep a snapshot of every load, so a rewritten day can be compared with what was first published
 :::

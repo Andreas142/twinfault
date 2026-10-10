@@ -78,6 +78,40 @@ def pipeline_facts(con, metric: str, token: str, peak: str, baseline: list[str])
     return f
 
 
+# ------------------------------------------------------------------ context from the marts
+
+def context_facts(con, metric: str, token: str, peak: str, baseline: list[str]) -> dict:
+    """Did the other stablecoins move the same way that day? Was the network busy? Which segment moved?"""
+    f: dict = {}
+    value = {"transfers": "sum(transfers)", "volume": "sum(volume)", "failure_rate": None}[metric]
+    if value:
+        rows = con.execute(f"""
+            select token, {value} filter (where date = date '{peak}') / nullif({value} filter (where date in {in_days(baseline)}) / {len(baseline)}, 0)
+            from payments where date in {in_days(baseline + [peak])} group by token order by token""").fetchall()
+    else:
+        rows = con.execute(f"""
+            select token, avg(failure_rate) filter (where date = date '{peak}')
+                          / nullif(avg(failure_rate) filter (where date in {in_days(baseline)}), 0)
+            from health where date in {in_days(baseline + [peak])} and direct_calls >= 500 group by token order by token""").fetchall()
+    f["token_ratios"] = {t: num(r) for t, r in rows}
+    f["fee_ratio"] = num(one(con, f"""
+        select avg(avg_base_fee_gwei) filter (where date = date '{peak}')
+               / nullif(avg(avg_base_fee_gwei) filter (where date in {in_days(baseline)}), 0)
+        from pipeline where date in {in_days(baseline + [peak])}""")[0])
+    if value:
+        seg = one(con, f"""
+            with s as (
+                select amount_band, route,
+                       {value} filter (where date = date '{peak}')
+                         - coalesce({value} filter (where date in {in_days(baseline)}), 0) / {len(baseline)} as extra
+                from payments where token = '{token}' and date in {in_days(baseline + [peak])} group by all)
+            select amount_band, route, extra, extra / sum(extra) over () as share
+            from s order by abs(extra) desc limit 1""")
+        if seg:
+            f["segment_band"], f["segment_route"], f["segment_extra"], f["segment_share"] = seg[0], seg[1], num(seg[2]), num(seg[3])
+    return f
+
+
 # ------------------------------------------------------------------ failure rate
 
 def failure_facts(con, token: str, peak: str, baseline: list[str]) -> dict:
@@ -234,6 +268,17 @@ def volume_facts(con, token: str, peak: str, baseline: list[str]) -> dict:
         select avg(s) from (select date, sum(amount) as s from (
             select date, amount, row_number() over (partition by date order by amount desc) as rk
             from v where date <> date '{peak}') where rk <= 10 group by date)""")[0])
+
+    # Concentration by address: did a few addresses send or receive most of the value?
+    for side, col in (("sender", "from_address"), ("receiver", "to_address")):
+        f[f"top10_{side}_volume"] = num(one(con, f"""
+            select sum(v) from (select sum(amount) as v from tr where token = '{token}' and date = date '{peak}'
+                                group by {col} order by v desc limit 10)""")[0])
+        f[f"top10_{side}_volume_baseline"] = num(one(con, f"""
+            select avg(s) from (select date, sum(v) as s from (
+                select date, {col}, sum(amount) as v, row_number() over (partition by date order by sum(amount) desc) as rk
+                from tr where token = '{token}' and date in {in_days(baseline)} group by date, {col})
+                where rk <= 10 group by date)""")[0])
 
     # Units: if amounts are off by a power of ten, the typical transfer moves by exactly that
     # factor, from some hour on, while the number of transfers stays normal.
