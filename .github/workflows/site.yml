@@ -44,7 +44,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           for attempt in 1 2 3 4 5; do
-            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data --include "marts/*" --include "investigations/*"; then
+            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data --include "marts/*" --include "investigations/*" --include "watch/*"; then
               exit 0
             fi
             echo "Download attempt $attempt failed; retrying"
