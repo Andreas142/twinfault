@@ -1,0 +1,137 @@
+name: Phase 5 - check what cannot happen
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_month:
+        description: "First month, as YYYY-MM"
+        required: true
+        default: "2024-01"
+      end_month:
+        description: "Last month, as YYYY-MM"
+        required: true
+        default: "2026-09"
+
+permissions:
+  contents: read
+
+env:
+  HF_REPO: andrew142/stablecoin-payments-eth
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      months: ${{ steps.months.outputs.months }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: List the months
+        id: months
+        env:
+          START: ${{ inputs.start_month }}
+          END: ${{ inputs.end_month }}
+        run: echo "months=$(python3 scripts/backfill_tools.py months "$START" "$END")" >> "$GITHUB_OUTPUT"
+
+  month:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        month: ${{ fromJSON(needs.plan.outputs.months) }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Download the month from Hugging Face
+        env:
+          MONTH: ${{ matrix.month }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data \
+                --include "stablecoin_transfers/date=$MONTH-*/*" \
+                --include "stablecoin_transactions/date=$MONTH-*/*" \
+                --include "blocks/date=$MONTH-*/*"; then
+              exit 0
+            fi
+            echo "Download attempt $attempt failed; retrying"
+            sleep $((60 * attempt))
+          done
+          exit 1
+
+      - name: Check every row of the month
+        env:
+          MONTH: ${{ matrix.month }}
+        run: python scripts/impossible.py --month "$MONTH" --data hf_data --out impossible
+
+      - name: Keep the month's results
+        uses: actions/upload-artifact@v7
+        with:
+          name: impossible-${{ matrix.month }}
+          path: impossible/${{ matrix.month }}.parquet
+          retention-days: 30
+
+  combine:
+    needs: [plan, month]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Collect every month's results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: impossible-*
+          merge-multiple: true
+          path: impossible
+
+      - name: Combine them
+        run: python scripts/impossible.py --combine impossible --out checks
+
+      - name: Upload to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf upload "$HF_REPO" checks checks --repo-type dataset --commit-message "Rows that cannot exist on Ethereum"; then
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed; retrying"
+            sleep $((30 * attempt))
+          done
+          exit 1
+
+      - name: Show the results on this page
+        if: always()
+        run: if [ -f checks/report.md ]; then cat checks/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: checks
+          path: checks/
+          if-no-files-found: ignore
+          retention-days: 30
