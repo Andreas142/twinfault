@@ -14,9 +14,12 @@ measurement. Comparing snapshots over time shows, as it happens:
 Usage:
   python scripts/snapshot_source.py snapshot --days 21 --out loads/new           # recent days
   python scripts/snapshot_source.py snapshot --month 2025-06 --out loads/new     # one past month
+  python scripts/snapshot_source.py combine --folder history --out loads/snapshots  # months -> one file
   python scripts/snapshot_source.py events --snapshots loads --manifest hf_data/load_manifest --out loads
 
 Snapshots are small (one row per source table and day), so every one is kept.
+events also writes status.parquet, one row the website reads: how many published days were
+compared with the load log, when they were last measured, and how many differ.
 """
 from __future__ import annotations
 
@@ -167,10 +170,13 @@ def events(snaps: pd.DataFrame, manifest: pd.DataFrame | None, now: pd.Timestamp
     if manifest is not None and not manifest.empty:
         latest = snaps.sort_values("taken_at").groupby(["source_table", "date"]).tail(1)
         m = manifest.merge(latest, on=["source_table", "date"], suffixes=("_published", ""))
-        for _, r in m[m.rows > 0].iterrows():
-            diffs = [describe(c, r[f"{c}_published"], r[c]) for c in
-                     ("rows", "files", "min_block", "max_block", "first_written", "last_written")
-                     if not same(r[f"{c}_published"], r[c])]
+        for _, r in m.iterrows():
+            if r.rows == 0:
+                diffs = [f"no longer in the source (it had {int(r.rows_published):,} rows)"]
+            else:
+                diffs = [describe(c, r[f"{c}_published"], r[c]) for c in
+                         ("rows", "files", "min_block", "max_block", "first_written", "last_written")
+                         if not same(r[f"{c}_published"], r[c])]
             if diffs:
                 rows.append({"kind": "republished", "source_table": r.source_table, "date": r.date,
                              "seen_at": r.taken_at, "detail": "since this project loaded it: " + "; ".join(diffs)})
@@ -181,17 +187,52 @@ def events(snaps: pd.DataFrame, manifest: pd.DataFrame | None, now: pd.Timestamp
     return out.sort_values(["seen_at", "date", "source_table"]).reset_index(drop=True)
 
 
-def report(ev: pd.DataFrame, new: pd.DataFrame, n_snapshots: int, last_taken: pd.Timestamp) -> str:
+def status(snaps: pd.DataFrame, manifest: pd.DataFrame | None, ev: pd.DataFrame) -> pd.DataFrame:
+    """One row: what the snapshots show so far. Proves a zero is a comparison, not an empty join."""
+    latest = snaps.sort_values("taken_at").groupby(["source_table", "date"]).tail(1)
+    published = compared = 0
+    rechecked = pd.NaT
+    if manifest is not None and not manifest.empty:
+        published = len(manifest)
+        m = manifest[["source_table", "date"]].merge(latest[["source_table", "date", "taken_at"]],
+                                                    on=["source_table", "date"])
+        compared = len(m)
+        rechecked = m.taken_at.min() if compared else pd.NaT
+    counts = ev.kind.value_counts()
+    arr = ev[ev.kind == "arrived"]
+    late_arr = arr[arr.hours_after_day > LATE_ROW_HOURS]
+    rep = ev[ev.kind == "republished"]
+    return pd.DataFrame([{
+        "first_taken": snaps.taken_at.min(), "last_taken": snaps.taken_at.max(),
+        "snapshots": int(snaps.taken_at.nunique()),
+        "published_table_days": published, "compared_table_days": compared,
+        "published_days": int(manifest.date.nunique()) if published else 0,
+        "rechecked_by": rechecked,
+        "republished_table_days": len(rep), "republished_days": int(rep.date.nunique()),
+        "arrived": int(counts.get("arrived", 0)), "late": int(counts.get("late", 0)),
+        "changed": int(counts.get("changed", 0)),
+        "median_arrival_hours": float(arr.hours_after_day.median()) if len(arr) else None,
+        "late_arrival_table_days": len(late_arr), "late_arrival_days": int(late_arr.date.nunique()),
+    }])
+
+
+def report(ev: pd.DataFrame, new: pd.DataFrame, st: pd.DataFrame) -> str:
+    s = st.iloc[0]
     lines = ["# Source snapshots", "",
-             f"{n_snapshots:,} snapshots, the latest taken {last_taken:%Y-%m-%d %H:%M} UTC.", ""]
+             f"{s.snapshots:,} snapshots, the latest taken {pd.Timestamp(s.last_taken):%Y-%m-%d %H:%M} UTC.", ""]
     counts = ev.kind.value_counts()
     lines += ["| Event | Count |", "| --- | --- |"]
     for kind in ("arrived", "late", "changed", "republished"):
         lines.append(f"| {kind} | {int(counts.get(kind, 0)):,} |")
-    if not ev.empty and (ev.kind == "arrived").any():
-        arr = ev[ev.kind == "arrived"]
-        lines += ["", f"Days arrive a median of {arr.hours_after_day.median():.1f} hours after they end; "
-                      f"{int((arr.hours_after_day > LATE_ROW_HOURS).sum())} arrived over {LATE_ROW_HOURS} hours late."]
+    if s.published_table_days:
+        when = f", each measured again on {pd.Timestamp(s.rechecked_by):%Y-%m-%d} or later" if s.compared_table_days else ""
+        lines += ["", f"Compared with what this project loaded: {s.compared_table_days:,} of "
+                      f"{s.published_table_days:,} published table-days{when}; "
+                      f"{s.republished_table_days:,} differ."]
+    if s.arrived:
+        lines += ["", f"Days arrive a median of {s.median_arrival_hours:.1f} hours after they end; "
+                      f"{s.late_arrival_table_days:,} table-days on {s.late_arrival_days:,} "
+                      f"day{'' if s.late_arrival_days == 1 else 's'} arrived over {LATE_ROW_HOURS} hours late."]
     lines += ["", f"## New in this run ({len(new)})", ""]
     if new.empty:
         lines.append("Nothing new: every day looks as it did in the previous snapshot.")
@@ -227,6 +268,9 @@ def main() -> int:
     s.add_argument("--out", default="loads/new")
     s.add_argument("--now", help="Pretend the time is this (for tests), as YYYY-MM-DD HH:MM")
     s.add_argument("--light", action="store_true", help="Skip the stablecoin measures (faster)")
+    c = sub.add_parser("combine", help="Merge the snapshot files in one folder into one file")
+    c.add_argument("--folder", required=True, help="Folder of snapshot files, such as one per month")
+    c.add_argument("--out", required=True, help="Folder to write the combined file to")
     e = sub.add_parser("events", help="Turn all snapshots into events")
     e.add_argument("--snapshots", default="loads", help="Folder with snapshots/*.parquet (and events.parquet)")
     e.add_argument("--manifest", help="The published load_manifest folder, to compare with")
@@ -234,7 +278,8 @@ def main() -> int:
     e.add_argument("--now")
     args = ap.parse_args()
 
-    now = pd.Timestamp(args.now) if args.now else pd.Timestamp(dt.datetime.now(dt.timezone.utc).replace(tzinfo=None))
+    given = getattr(args, "now", None)  # combine has no --now
+    now = pd.Timestamp(given) if given else pd.Timestamp(dt.datetime.now(dt.timezone.utc).replace(tzinfo=None))
     if args.cmd == "snapshot":
         if args.month:
             start = pd.Timestamp(args.month + "-01")
@@ -254,6 +299,18 @@ def main() -> int:
         return 0
 
     con = duckdb.connect()
+    if args.cmd == "combine":
+        df = read_parquet_dir(con, f"{Path(args.folder).as_posix()}/*.parquet")
+        if df.empty:  # every month failed: say so, but still take today's snapshot
+            print(f"::warning::No snapshot files in {args.folder}, so no published day was measured again")
+            return 0
+        out = Path(args.out)
+        out.mkdir(parents=True, exist_ok=True)
+        name = f"{pd.Timestamp(df.taken_at.min()):%Y-%m-%dT%H%M}_history.parquet"
+        save(df.sort_values(["source_table", "date"]).reset_index(drop=True), out / name)
+        print(f"Combined {df.date.nunique():,} days into {name}")
+        return 0
+
     folder = Path(args.snapshots)
     snaps = read_parquet_dir(con, f"{folder.as_posix()}/snapshots/*.parquet")
     if snaps.empty:
@@ -272,9 +329,11 @@ def main() -> int:
     new = ev[~ev.event_id.isin(known) & ev.kind.isin(["late", "changed", "republished"])]
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    st = status(snaps, manifest, ev)
     save(ev, out / "events.parquet")
     save(new, out / "new_events.parquet")
-    text = report(ev, new, snaps.taken_at.nunique(), pd.Timestamp(snaps.taken_at.max()))
+    save(st, out / "status.parquet")
+    text = report(ev, new, st)
     (out / "report.md").write_text(text)
     (out / "new_events.md").write_text(text.split("## New in this run")[1] if not new.empty else "")
     print(text)
