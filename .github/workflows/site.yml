@@ -2,9 +2,9 @@ name: Phase 3b - publish the website
 
 on:
   workflow_dispatch:
-  # Rebuild the site whenever the analytics cube has been rebuilt.
+  # Rebuild the site whenever the analytics cube is rebuilt or the source is snapshotted.
   workflow_run:
-    workflows: ["Phase 3 - build the analytics cube"]
+    workflows: ["Phase 3 - build the analytics cube", "Phase 6 - snapshot the source every day"]
     types: [completed]
 
 permissions:
@@ -23,7 +23,7 @@ env:
 
 jobs:
   build:
-    # After a cube build, publish only if that build succeeded.
+    # After a cube build or a snapshot, publish only if it succeeded.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -44,7 +44,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           for attempt in 1 2 3 4 5; do
-            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data --include "marts/*" --include "investigations/*" --include "watch/*" --include "checks/*"; then
+            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data --include "marts/*" --include "investigations/*" --include "watch/*" --include "checks/*" --include "loads/status.parquet" --include "loads/events.parquet"; then
               exit 0
             fi
             echo "Download attempt $attempt failed; retrying"

@@ -2,11 +2,12 @@ name: Phase 6 - snapshot the source every day
 
 on:
   schedule:
-    - cron: "41 6 * * *"   # every day at 06:41 UTC
+    - cron: "41 6 * * 1-6"   # Monday to Saturday at 06:41 UTC: the last 14 days
+    - cron: "17 2 * * 0"     # Sunday at 02:17 UTC: the last 14 days and every published day again
   workflow_dispatch:
     inputs:
       history:
-        description: "Also re-measure every published month and compare it with what this project loaded"
+        description: "Also measure every published day again and compare it with what this project loaded"
         type: boolean
         default: false
 
@@ -25,17 +26,21 @@ env:
 
 jobs:
   plan:
-    if: ${{ inputs.history }}
+    # Every published day is measured again on Sundays, or when "history" is ticked.
+    if: ${{ inputs.history || github.event.schedule == '17 2 * * 0' }}
     runs-on: ubuntu-24.04
     outputs:
       months: ${{ steps.months.outputs.months }}
+      now: ${{ steps.months.outputs.now }}
     steps:
       - name: Get the code
         uses: actions/checkout@v7
 
       - name: List the published months
         id: months
-        run: echo "months=$(python3 scripts/backfill_tools.py months "$FIRST_MONTH" "$LAST_MONTH")" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "months=$(python3 scripts/backfill_tools.py months "$FIRST_MONTH" "$LAST_MONTH")" >> "$GITHUB_OUTPUT"
+          echo "now=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_OUTPUT"
 
   history:
     needs: plan
@@ -58,17 +63,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r site/requirements.txt
 
+      # Every month gets the same time, so the months together count as one snapshot.
       - name: Measure the month in the source now
         env:
           MONTH: ${{ matrix.month }}
-        run: python scripts/snapshot_source.py snapshot --month "$MONTH" --light --out history
+          NOW: ${{ needs.plan.outputs.now }}
+        run: python scripts/snapshot_source.py snapshot --month "$MONTH" --light --now "$NOW" --out history
 
       - name: Keep the snapshot
         uses: actions/upload-artifact@v7
         with:
           name: snapshot-${{ matrix.month }}
           path: history/
-          retention-days: 30
+          retention-days: 7
 
   snapshot:
     needs: [plan, history]
@@ -101,13 +108,17 @@ jobs:
           done
           exit 1
 
-      - name: Add the history snapshots
-        if: ${{ inputs.history }}
+      - name: Collect the months measured again
+        if: ${{ needs.plan.result == 'success' }}
         uses: actions/download-artifact@v8
         with:
           pattern: snapshot-*
           merge-multiple: true
-          path: hf_data/loads/snapshots
+          path: history
+
+      - name: Keep them as one snapshot file
+        if: ${{ needs.plan.result == 'success' }}
+        run: python scripts/snapshot_source.py combine --folder history --out hf_data/loads/snapshots
 
       - name: Measure the last 14 days in the source now
         run: python scripts/snapshot_source.py snapshot --days 14 --out hf_data/loads/snapshots
