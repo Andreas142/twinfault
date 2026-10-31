@@ -1,0 +1,154 @@
+name: Phase 6 - snapshot the source every day
+
+on:
+  schedule:
+    - cron: "41 6 * * *"   # every day at 06:41 UTC
+  workflow_dispatch:
+    inputs:
+      history:
+        description: "Also re-measure every published month and compare it with what this project loaded"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: source-snapshot
+  cancel-in-progress: false
+
+env:
+  HF_REPO: andrew142/stablecoin-payments-eth
+  FIRST_MONTH: "2024-01"
+  LAST_MONTH: "2026-09"
+
+jobs:
+  plan:
+    if: ${{ inputs.history }}
+    runs-on: ubuntu-24.04
+    outputs:
+      months: ${{ steps.months.outputs.months }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: List the published months
+        id: months
+        run: echo "months=$(python3 scripts/backfill_tools.py months "$FIRST_MONTH" "$LAST_MONTH")" >> "$GITHUB_OUTPUT"
+
+  history:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        month: ${{ fromJSON(needs.plan.outputs.months) }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Measure the month in the source now
+        env:
+          MONTH: ${{ matrix.month }}
+        run: python scripts/snapshot_source.py snapshot --month "$MONTH" --light --out history
+
+      - name: Keep the snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: snapshot-${{ matrix.month }}
+          path: history/
+          retention-days: 30
+
+  snapshot:
+    needs: [plan, history]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Download earlier snapshots and the published load log
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf download "$HF_REPO" --repo-type dataset --local-dir hf_data \
+                --include "loads/*" --include "load_manifest/*"; then
+              exit 0
+            fi
+            echo "Download attempt $attempt failed; retrying"
+            sleep $((60 * attempt))
+          done
+          exit 1
+
+      - name: Add the history snapshots
+        if: ${{ inputs.history }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: snapshot-*
+          merge-multiple: true
+          path: hf_data/loads/snapshots
+
+      - name: Measure the last 14 days in the source now
+        run: python scripts/snapshot_source.py snapshot --days 14 --out hf_data/loads/snapshots
+
+      - name: Find what arrived, is late or changed
+        run: |
+          python scripts/snapshot_source.py events --snapshots hf_data/loads \
+            --manifest hf_data/load_manifest --out hf_data/loads
+
+      - name: Upload the snapshots and events to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf upload "$HF_REPO" hf_data/loads loads --repo-type dataset --commit-message "Source snapshot"; then
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed; retrying"
+            sleep $((30 * attempt))
+          done
+          exit 1
+
+      - name: Open an issue if something new happened
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -s hf_data/loads/new_events.md ]; then
+            {
+              echo "The daily snapshot of the AWS source found something new."
+              echo
+              head -n 60 hf_data/loads/new_events.md
+              echo
+              echo "Run: $RUN_URL"
+            } > issue.md
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Source changed: new events on $(date -u +%Y-%m-%d)" --body-file issue.md
+          else
+            echo "Nothing new: no issue opened."
+          fi
+
+      - name: Show the results on this page
+        if: always()
+        run: if [ -f hf_data/loads/report.md ]; then cat hf_data/loads/report.md >> "$GITHUB_STEP_SUMMARY"; fi
