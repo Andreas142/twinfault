@@ -32,6 +32,10 @@ The four cases above were worked out by hand. `scripts/watch.py` does the same w
 
 Things it found that were not investigated by hand: USDT dust waves after the Fusaka upgrade (December 2025 to January 2026, up to 3× the usual transfers, mostly under 1 token) and the day they ended (late April 2026, when daily USDT transfers halved); a 368B USDC day (22 March 2026) where ten addresses sent most of the extra value; and several more failure waves from single programs, each with its own exact gas value.
 
+## Verified on every row
+
+Some rows cannot exist on Ethereum: a transfer inside a failed transaction, a transfer in a different block from its transaction, a block whose parent is not the block before it, a fee below the block's base fee. `scripts/impossible.py` checks 16 such rules on every row of the dataset. **No row breaks any of them**: 732,947,031 transfers, 408,671,656 transactions and 7,184,843 blocks. So the source's rows are internally consistent; its weakness is timing, the 61 days it rewrote after publishing. Results: the [Data health](https://andreas142.github.io/twinfault/data-health) page.
+
 ## The look-alike pairs
 
 Every metric move has two possible explanations that look the same on a dashboard: a pipeline fault, or a real change in behaviour. The metric alone cannot separate them; the rows can. Most of these checks run automatically on every unusual day.
@@ -78,13 +82,14 @@ There is no server, no database to host and no subscription. Every step is a Git
 | Phase 3b - publish the website | Builds the dbt docs and the Quarto site and deploys them to GitHub Pages |
 | Phase 3c - investigate the unusual days | Runs the investigations and uploads their result tables |
 | Phase 4 - investigate every unusual day | Finds and checks every unusual day automatically and uploads the verdicts |
+| Phase 5 - check what cannot happen | Checks 16 rules Ethereum makes impossible to break on every row, month by month |
 
 ## Repository layout
 
 ```
-.github/workflows/   the seven workflows above
+.github/workflows/   the eight workflows above
 twinfault/           episode detection, checks on the raw rows, and the verdict rules
-scripts/             extract, backfill helpers, AWS probe, investigations, watch
+scripts/             extract, backfill helpers, AWS probe, investigations, watch, every-row rules
 analytics/           dbt project: staging models, marts, tests, docs overview
 site/                Quarto website: one .qmd per page, shared helpers in twinfault_site.py
 ```
@@ -109,6 +114,7 @@ The [dataset card](https://huggingface.co/datasets/andrew142/stablecoin-payments
 - [x] Website and dbt documentation
 - [x] Four real anomalies investigated: pipeline or business, with evidence
 - [x] Every unusual day found and checked automatically, and scored against the hand investigations
+- [x] 16 rules Ethereum makes impossible to break, checked on every row: no row breaks any
 - [ ] Run the checks automatically after each new month is loaded
 - [ ] Keep a snapshot of every load, so a rewritten day can be compared with what was first published
 
