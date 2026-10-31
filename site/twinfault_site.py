@@ -190,6 +190,35 @@ def impossible_summary() -> pd.DataFrame:
     return _con.execute(f"select * from read_parquet('{path.as_posix()}')").df()
 
 
+LOADS = MARTS.parent / "loads"
+
+
+def source_status() -> dict | None:
+    """What the daily snapshots of the AWS source show so far (scripts/snapshot_source.py).
+
+    None if no snapshot has been taken yet, so the rest of the site still builds.
+    """
+    path = LOADS / "status.parquet"
+    if not path.exists():
+        return None
+    return _con.execute(f"select * from read_parquet('{path.as_posix()}')").df().iloc[0].to_dict()
+
+
+def source_events(kinds: tuple[str, ...] = ("late", "changed", "republished")) -> pd.DataFrame:
+    """Events from the source snapshots; by default every day that arrived late, changed,
+    or differs from what was loaded."""
+    path = LOADS / "events.parquet"
+    if not path.exists():
+        return pd.DataFrame(columns=["kind", "source_table", "date", "seen_at", "detail", "hours_after_day"])
+    listed = ", ".join(f"'{k}'" for k in kinds)
+    return _con.execute(f"""
+        select * from read_parquet('{path.as_posix()}')
+        where kind in ({listed})
+        order by case kind when 'republished' then 0 when 'changed' then 1 else 2 end,
+                 seen_at desc, date desc, source_table
+    """).df()
+
+
 FAMILIES = {
     # family: (label, css class, one-line meaning)
     "pipeline": ("Pipeline", "fam-pipeline", "The rows themselves are wrong: missing, repeated, incomplete or in the wrong units."),

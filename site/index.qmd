@@ -22,6 +22,15 @@ months = int(totals.months)
 blocks_note = "Ethereum blocks, none missing or duplicated" if pipe.gaps == 0 else "Ethereum blocks checked for gaps"
 tests_value = str(tests) if tests else "dbt"
 tests_note = "dbt tests passed by every month" if tests else "tests on every month"
+src = source_status()
+if src is None:
+    source_line = "The AWS source snapshotted every day and every published day measured again weekly"
+elif src["republished_table_days"] == 0:
+    source_line = ("The AWS source snapshotted every day and every published day measured again weekly: "
+                   "none has changed since it was loaded")
+else:
+    source_line = (f"The AWS source snapshotted every day and every published day measured again weekly: "
+                   f"{src['republished_days']:,} days have changed since they were loaded")
 ```
 
 ::: {.hero .column-page}
@@ -159,6 +168,6 @@ print(f'<div class="flow column-page">{cells}</div>')
 - [Done]{.badge-done} Four real anomalies investigated: pipeline or business, with evidence
 - [Done]{.badge-done} Every unusual day found and checked automatically, and scored against the hand investigations
 - [Done]{.badge-done} 16 rules Ethereum makes impossible to break, checked on every row: no row breaks any
+- [Done]{.badge-done} `{python} source_line`
 - [Next]{.badge-next} Run the checks automatically after each new month is loaded
-- [Next]{.badge-next} Keep a snapshot of every load, so a rewritten day can be compared with what was first published
 :::

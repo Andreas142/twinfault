@@ -18,6 +18,9 @@ gaps = int(p.missing_blocks.sum() + p.duplicate_blocks.sum())
 usual_lag = p.max_load_lag_hours.median()
 flags = sql("select * from pipeline_flags")
 rules = impossible_summary()
+src = source_status()
+src_events = source_events()
+late_arrivals = source_events(kinds=("arrived",))
 late_days = int((flags.pipeline == "Late or rewritten").sum())
 tests = dbt_test_count()
 ```
@@ -149,6 +152,10 @@ or 62 days old (error).</li>
 <li><b>Every row</b> (once, over the whole dataset): 16 rules that Ethereum itself makes
 impossible to break, such as a transfer inside a failed transaction or a block whose parent is
 not the block before it. Any hit would be a bug in the source. Results are in the table below.</li>
+<li><b>The source itself</b> (every day): the last 14 days of the AWS source are measured every
+morning, and every published day again every Sunday, the same way the load log measured them.
+A day that arrives late, changes, or no longer matches what was loaded opens an issue on GitHub.
+Results are at the bottom of this page.</li>
 <li><b>This page</b>: a day is <i>late or rewritten</i> if its slowest row was written more than
 twice the usual delay ({usual_lag:.0f} hours) after its block. Either the data arrived late, or the
 source rewrote that day afterwards; both mean the day's numbers may have changed after they were
@@ -161,7 +168,7 @@ so a gap is visible without trusting the loader.</p>
 """)
 ```
 
-## Row
+## Row {height=790px}
 
 ```{python}
 #| title: Rules that cannot be broken on Ethereum, checked on every row
@@ -183,5 +190,71 @@ else:
     out = HTML(headline + html_table(table, numeric=("Rows checked", "Rows breaking it"))
                + '<p class="note">The checks already run before each upload (block gaps, duplicates, '
                  'missing values) are not repeated here.</p>')
+out
+```
+
+## Row {height=400px}
+
+```{python}
+#| title: Has the AWS source changed since it was loaded?
+def duration(hours: float) -> str:
+    return f"{hours * 60:.0f} minutes" if hours < 1 else f"{hours:.1f} hours"
+
+def days(n: int) -> str:
+    return f"{n:,} day" if n == 1 else f"{n:,} days"
+
+if src is None:
+    out = HTML("<p>No snapshot summary yet. It appears after the next run of "
+               "<i>Phase 6 - snapshot the source every day</i>.</p>")
+else:
+    parts = []
+    whole = src["compared_table_days"] == src["published_table_days"]
+    scope = (f"All {src['published_days']:,} published days ({src['compared_table_days']:,} table-days)" if whole
+             else f"{src['compared_table_days']:,} of {src['published_table_days']:,} published table-days")
+    when = pd.Timestamp(src["rechecked_by"]).strftime("%d %b %Y")
+    if src["republished_table_days"] == 0:
+        parts.append(f"<p><b>No published day has changed.</b> {scope} were measured again in the AWS "
+                     f"source on {when} or later, and each matches what was loaded: rows, files, block "
+                     "range and write times.</p>")
+    else:
+        n = src["republished_days"]
+        parts.append(f"<p><b>{n:,} published {'day has' if n == 1 else 'days have'} changed since "
+                     f"{'it was' if n == 1 else 'they were'} loaded</b> ({src['republished_table_days']:,} table-days, listed below). {scope} were "
+                     f"measured again on {when} or later. Any number on this site for those days may differ "
+                     "from the source today.</p>")
+    late = late_arrivals[late_arrivals.hours_after_day > 48]
+    late_dates = set(late.date)
+    flagged = set(flags[flags.pipeline == "Late or rewritten"].date)
+    if not late_dates:
+        late_text = "No day was first written more than 48 hours after it ended."
+    else:
+        among = (f"{'it is' if len(late_dates) == 1 else f'all {len(late_dates):,} are'} among the "
+                 f"{late_days:,} late or rewritten days above"
+                 if late_dates <= flagged else
+                 f"{len(late_dates & flagged):,} of them are among the {late_days:,} late or rewritten days above")
+        late_text = (f"{days(len(late_dates))} {'was' if len(late_dates) == 1 else 'were'} first written more "
+                     f"than 48 hours after {'it' if len(late_dates) == 1 else 'they'} ended: {among}.")
+    parts.append(f"<p>Snapshots started on {pd.Timestamp(src['first_taken']):%d %b %Y}; the latest was taken "
+                 f"{pd.Timestamp(src['last_taken']):%d %b %Y %H:%M} UTC. A day usually reaches the source "
+                 f"{duration(src['median_arrival_hours'])} after it ends. {late_text}</p>")
+    if src_events.empty:
+        parts.append("<p>Since the snapshots started, no day has arrived late, changed, or stopped matching "
+                     "what was loaded.</p>")
+    else:
+        kinds = {"late": ("Late", "warn"), "changed": ("Changed", "warn"), "republished": ("Differs from load", "bad")}
+        shown = src_events.head(20)
+        table = pd.DataFrame({
+            "Seen": shown.seen_at.dt.strftime("%d %b %Y"),
+            "Event": [f'<span class="pill pill-{kinds[k][1]}">{kinds[k][0]}</span>' for k in shown.kind],
+            "Table": shown.source_table,
+            "Day": shown.date.dt.strftime("%a %d %b %Y"),
+            "What changed": [f'<span style="display:inline-block;white-space:normal;min-width:16rem">{d}</span>'
+                             for d in shown.detail],
+        })
+        if len(src_events) > len(shown):
+            parts.append(f'<p class="note">{len(src_events):,} events in total; {len(shown)} are shown, '
+                         'differences from the load first, then changes, then days not yet in the source.</p>')
+        parts.append(html_table(table))
+    out = HTML("".join(parts))
 out
 ```
