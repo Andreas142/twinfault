@@ -176,6 +176,20 @@ def watch_agreement() -> list[dict]:
     return json.loads((WATCH / "agreement.json").read_text())
 
 
+CHECKS = MARTS.parent / "checks"
+
+
+def impossible_summary() -> pd.DataFrame:
+    """Results of scripts/impossible.py: rules Ethereum makes impossible, checked on every row.
+
+    Empty if the check has not been run yet, so the rest of the site still builds.
+    """
+    path = CHECKS / "impossible_summary.parquet"
+    if not path.exists():
+        return pd.DataFrame()
+    return _con.execute(f"select * from read_parquet('{path.as_posix()}')").df()
+
+
 FAMILIES = {
     # family: (label, css class, one-line meaning)
     "pipeline": ("Pipeline", "fam-pipeline", "The rows themselves are wrong: missing, repeated, incomplete or in the wrong units."),

@@ -158,6 +158,7 @@ print(f'<div class="flow column-page">{cells}</div>')
 - [Done]{.badge-done} This website and the dbt documentation
 - [Done]{.badge-done} Four real anomalies investigated: pipeline or business, with evidence
 - [Done]{.badge-done} Every unusual day found and checked automatically, and scored against the hand investigations
+- [Done]{.badge-done} 16 rules Ethereum makes impossible to break, checked on every row: no row breaks any
 - [Next]{.badge-next} Run the checks automatically after each new month is loaded
 - [Next]{.badge-next} Keep a snapshot of every load, so a rewritten day can be compared with what was first published
 :::

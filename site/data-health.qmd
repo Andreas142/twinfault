@@ -17,6 +17,7 @@ expected_days = (last - first).days + 1
 gaps = int(p.missing_blocks.sum() + p.duplicate_blocks.sum())
 usual_lag = p.max_load_lag_hours.median()
 flags = sql("select * from pipeline_flags")
+rules = impossible_summary()
 late_days = int((flags.pipeline == "Late or rewritten").sum())
 tests = dbt_test_count()
 ```
@@ -145,6 +146,9 @@ no block gaps and a reconciliation that the daily cube adds up to the raw transf
 A month that fails is not uploaded.</li>
 <li><b>Freshness</b>: the load log for last month must be less than 35 days old (warning)
 or 62 days old (error).</li>
+<li><b>Every row</b> (once, over the whole dataset): 16 rules that Ethereum itself makes
+impossible to break, such as a transfer inside a failed transaction or a block whose parent is
+not the block before it. Any hit would be a bug in the source. Results are in the table below.</li>
 <li><b>This page</b>: a day is <i>late or rewritten</i> if its slowest row was written more than
 twice the usual delay ({usual_lag:.0f} hours) after its block. Either the data arrived late, or the
 source rewrote that day afterwards; both mean the day's numbers may have changed after they were
@@ -155,4 +159,29 @@ first published. What these days look like is shown on the
 That is why completeness is checked from the data itself: block numbers are sequential,
 so a gap is visible without trusting the loader.</p>
 """)
+```
+
+## Row
+
+```{python}
+#| title: Rules that cannot be broken on Ethereum, checked on every row
+if rules.empty:
+    out = HTML('<p>The every-row check has not been run yet.</p>')
+else:
+    total = int(rules.violations.sum())
+    table = pd.DataFrame({
+        "Rule": rules.check,
+        "Table": rules.tbl,
+        "A hit would mean a bug in": rules.fault.map({"source": "the source", "our extract": "our extract"}),
+        "Rows checked": rules.rows_checked.map(lambda n: f"{int(n):,}"),
+        "Rows breaking it": rules.violations.map(lambda n: f"{int(n):,}"),
+        "Result": [pill("OK") if n == 0 else '<span class="pill pill-bad">Broken</span>' for n in rules.violations],
+    })
+    rows = int(rules.groupby("tbl").rows_checked.max().sum())
+    headline = (f"<p><b>No row breaks any rule:</b> {rows:,} rows checked across all three tables.</p>" if total == 0
+                else f"<p><b>{total:,} rows break a rule.</b> Each one is a bug in the source data.</p>")
+    out = HTML(headline + html_table(table, numeric=("Rows checked", "Rows breaking it"))
+               + '<p class="note">The checks already run before each upload (block gaps, duplicates, '
+                 'missing values) are not repeated here.</p>')
+out
 ```
