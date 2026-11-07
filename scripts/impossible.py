@@ -12,6 +12,8 @@ are not repeated here.
 Usage:
   python scripts/impossible.py --month 2025-06 --data hf_data --out impossible
   python scripts/impossible.py --combine impossible --out checks      (after all months)
+  python scripts/impossible.py --combine impossible --keep old/impossible_days.parquet --out checks
+                                                    (one new month, kept with the earlier ones)
 
 Per month it writes <out>/<month>.parquet: one row per day and check, with the rows
 checked, the rows that broke the rule, and one example. --combine merges the months
@@ -186,9 +188,13 @@ def save(df: pd.DataFrame, path: Path) -> None:
     con.execute(f"copy df to '{path.as_posix()}' (format parquet)")
 
 
-def combine(folder: Path, out: Path) -> str:
+def combine(folder: Path, out: Path, keep: Path | None = None) -> str:
     con = duckdb.connect()
-    days = con.execute(f"select * from read_parquet('{folder.as_posix()}/*.parquet') order by date, \"check\"").df()
+    days = con.execute(f"select * from read_parquet('{folder.as_posix()}/*.parquet')").df()
+    if keep is not None and keep.exists():  # earlier months stay; months checked again are replaced
+        old = con.execute(f"select * from read_parquet('{keep.as_posix()}')").df()
+        days = pd.concat([old[~old.month.isin(set(days.month))], days], ignore_index=True)
+    days = days.sort_values(["date", "check"]).reset_index(drop=True)
     save(days, out / "impossible_days.parquet")
     summary = con.execute("""
         select "check", any_value("table") as tbl, any_value(fault) as fault, sum(checked) as rows_checked,
@@ -227,12 +233,13 @@ def main() -> int:
     ap.add_argument("--month")
     ap.add_argument("--data", default="hf_data")
     ap.add_argument("--combine", help="Folder of per-month results to merge")
+    ap.add_argument("--keep", help="Earlier impossible_days.parquet whose other months are kept")
     ap.add_argument("--out", default="impossible")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     if args.combine:
-        print(combine(Path(args.combine), out))
+        print(combine(Path(args.combine), out, Path(args.keep) if args.keep else None))
         return 0
     if not args.month:
         ap.error("--month or --combine is required")

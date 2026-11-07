@@ -15,7 +15,7 @@ Dataset layout on Hugging Face:
 Usage:
   python scripts/backfill_tools.py months 2024-01 2026-09
   python scripts/backfill_tools.py upload --month 2025-06 --data-dir data --report report.md \\
-      --stats stats.json --repo andrew142/stablecoin-payments-eth
+      --stats stats.json --repo andrew142/stablecoin-payments-eth [--require-checks]
   python scripts/backfill_tools.py summary stats '["2025-06"]'
 """
 
@@ -74,6 +74,18 @@ def stage(month: str, data_dir: str, report: str, stats: str) -> list:
     return sorted(staged)
 
 
+def quality_problems(stats_path: str) -> list:
+    """Failed checks and errors in an extract's stats: why a month must not be published."""
+    with open(stats_path, encoding="utf-8") as fh:
+        stats = json.load(fh)
+    problems = [f"{c['check']} = {c['result']} (expected {c['expected']})" for c in stats.get("checks", [])
+                if not c["passed"]]
+    problems += [f"error: {e}" for e in stats.get("errors", [])]
+    if not stats.get("checks"):
+        problems.append("no checks ran")
+    return problems
+
+
 def cmd_upload(args) -> int:
     if not MONTH.match(args.month) or not REPO.match(args.repo):
         print("Bad --month or --repo value.", file=sys.stderr)
@@ -86,6 +98,13 @@ def cmd_upload(args) -> int:
     if missing:
         print(f"Refusing to upload: no output for {missing}.", file=sys.stderr)
         return 1
+    if args.require_checks:
+        problems = quality_problems(args.stats)
+        if problems:
+            print("Refusing to upload: the month did not pass its checks.", file=sys.stderr)
+            for item in problems:
+                print(f"::error::{args.month}: {item}", file=sys.stderr)
+            return 1
     if args.dry_run:
         print("Dry run: nothing uploaded.")
         return 0
@@ -180,6 +199,8 @@ def main() -> int:
     p.add_argument("--repo", required=True, help="Dataset id, e.g. andrew142/stablecoin-payments-eth")
     p.add_argument("--attempts", type=int, default=5)
     p.add_argument("--dry-run", action="store_true", help="Stage the files but do not upload")
+    p.add_argument("--require-checks", action="store_true",
+                   help="Refuse to upload a month with a failed check or an error (used by the monthly load)")
     p.set_defaults(func=cmd_upload)
 
     p = sub.add_parser("summary", help="Print a Markdown table of all months")
