@@ -11,6 +11,22 @@ on:
         description: "Last month, as YYYY-MM"
         required: true
         default: "2026-09"
+      strict:
+        description: "Refuse to upload a month that fails a check"
+        type: boolean
+        default: false
+  # Phase 7 calls this workflow for one new month.
+  workflow_call:
+    inputs:
+      start_month:
+        type: string
+        required: true
+      end_month:
+        type: string
+        required: true
+      strict:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -69,7 +85,11 @@ jobs:
         env:
           MONTH: ${{ matrix.month }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: python scripts/backfill_tools.py upload --month "$MONTH" --data-dir data --report report.md --stats stats.json --repo "$HF_REPO"
+          STRICT: ${{ inputs.strict && '--require-checks' || '' }}
+        run: |
+          # shellcheck disable=SC2086  # $STRICT is empty or one flag
+          python scripts/backfill_tools.py upload --month "$MONTH" --data-dir data --report report.md \
+            --stats stats.json --repo "$HF_REPO" $STRICT
 
       - name: Keep this month's results
         if: always()

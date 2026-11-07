@@ -11,6 +11,15 @@ on:
         description: "Last month, as YYYY-MM"
         required: true
         default: "2026-09"
+  # Phase 7 calls this workflow for one new month.
+  workflow_call:
+    inputs:
+      start_month:
+        type: string
+        required: true
+      end_month:
+        type: string
+        required: true
 
 permissions:
   contents: read

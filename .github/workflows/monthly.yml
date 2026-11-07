@@ -1,0 +1,143 @@
+name: Phase 7 - load each new month
+
+# Every month, once the source has the whole of last month, load it and run every check on it:
+# the checks before upload, dbt build and tests, the rules that cannot be broken on Ethereum,
+# and the investigation of every unusual day. Each step is the same workflow used for the
+# backfill, called for one month. The website rebuilds after this run, and a report of what
+# the month showed is opened as a GitHub issue.
+on:
+  schedule:
+    - cron: "23 5 3-10 * *"   # 05:23 UTC on the 3rd to the 10th; a month already loaded is skipped
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to load, as YYYY-MM (empty: last month)"
+        required: false
+        default: ""
+      force:
+        description: "Load it again even if it is already loaded"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: monthly-load
+  cancel-in-progress: false
+
+env:
+  HF_REPO: andrew142/stablecoin-payments-eth
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      month: ${{ steps.plan.outputs.month }}
+      load: ${{ steps.plan.outputs.load }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Is the month complete in the source, and not loaded yet?
+        id: plan
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MONTH: ${{ inputs.month }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: |
+          # shellcheck disable=SC2086  # $FORCE is empty or one flag
+          python scripts/monthly.py plan --month "${MONTH:-auto}" --repo "$HF_REPO" $FORCE \
+            --output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue if the month is overdue
+        if: ${{ steps.plan.outputs.overdue == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MONTH: ${{ steps.plan.outputs.month }}
+          REASON: ${{ steps.plan.outputs.reason }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s\n\nThe monthly load will not run until every day is in the source. Run: %s\n' \
+            "$REASON" "$RUN_URL" > issue.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$MONTH is overdue in the source" --body-file issue.md
+
+  load:
+    needs: plan
+    if: ${{ needs.plan.outputs.load == 'true' }}
+    uses: ./.github/workflows/backfill.yml
+    with:
+      start_month: ${{ needs.plan.outputs.month }}
+      end_month: ${{ needs.plan.outputs.month }}
+      strict: true
+    secrets: inherit
+
+  build:
+    needs: [plan, load]
+    uses: ./.github/workflows/dbt.yml
+    with:
+      start_month: ${{ needs.plan.outputs.month }}
+      end_month: ${{ needs.plan.outputs.month }}
+    secrets: inherit
+
+  rules:
+    needs: [plan, load]
+    uses: ./.github/workflows/impossible.yml
+    with:
+      start_month: ${{ needs.plan.outputs.month }}
+      end_month: ${{ needs.plan.outputs.month }}
+    secrets: inherit
+
+  watch:
+    needs: [plan, build]
+    uses: ./.github/workflows/watch.yml
+    with:
+      max_episodes: "200"
+    secrets: inherit
+
+  report:
+    needs: [plan, load, build, rules, watch]
+    if: ${{ always() && needs.plan.outputs.load == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r site/requirements.txt
+
+      - name: Collect the results of every step
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Write the month's report
+        env:
+          MONTH: ${{ needs.plan.outputs.month }}
+          RESULTS: "load=${{ needs.load.result }},build=${{ needs.build.result }},rules=${{ needs.rules.result }},watch=${{ needs.watch.result }}"
+        run: |
+          python scripts/monthly.py report --month "$MONTH" --artifacts artifacts --results "$RESULTS" \
+            --out report.md --title title.txt
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue with the report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          { cat report.md; echo; echo "Run: $RUN_URL"; } > issue.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$(cat title.txt)" --body-file issue.md

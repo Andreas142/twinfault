@@ -22,7 +22,6 @@ concurrency:
 env:
   HF_REPO: andrew142/stablecoin-payments-eth
   FIRST_MONTH: "2024-01"
-  LAST_MONTH: "2026-09"
 
 jobs:
   plan:
@@ -36,9 +35,11 @@ jobs:
       - name: Get the code
         uses: actions/checkout@v7
 
+      # Up to last month: Phase 7 loads each month soon after it ends.
       - name: List the published months
         id: months
         run: |
+          LAST_MONTH=$(date -u -d "$(date -u +%Y-%m-01) -1 month" +%Y-%m)
           echo "months=$(python3 scripts/backfill_tools.py months "$FIRST_MONTH" "$LAST_MONTH")" >> "$GITHUB_OUTPUT"
           echo "now=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_OUTPUT"
 

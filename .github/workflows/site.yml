@@ -2,9 +2,10 @@ name: Phase 3b - publish the website
 
 on:
   workflow_dispatch:
-  # Rebuild the site whenever the analytics cube is rebuilt or the source is snapshotted.
+  # Rebuild the site whenever the analytics cube is rebuilt, a month is loaded, or the source is snapshotted.
   workflow_run:
-    workflows: ["Phase 3 - build the analytics cube", "Phase 6 - snapshot the source every day"]
+    workflows: ["Phase 3 - build the analytics cube", "Phase 6 - snapshot the source every day",
+                "Phase 7 - load each new month"]
     types: [completed]
 
 permissions:
@@ -23,7 +24,7 @@ env:
 
 jobs:
   build:
-    # After a cube build or a snapshot, publish only if it succeeded.
+    # After a cube build, a monthly load or a snapshot, publish only if it succeeded.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30

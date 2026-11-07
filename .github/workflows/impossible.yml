@@ -11,6 +11,15 @@ on:
         description: "Last month, as YYYY-MM"
         required: true
         default: "2026-09"
+  # Phase 7 calls this workflow for one new month.
+  workflow_call:
+    inputs:
+      start_month:
+        type: string
+        required: true
+      end_month:
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -107,8 +116,23 @@ jobs:
           merge-multiple: true
           path: impossible
 
+      # Months not checked in this run keep their earlier results.
+      - name: Download the earlier results
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if hf download "$HF_REPO" --repo-type dataset --local-dir previous \
+                --include "checks/impossible_days.parquet"; then
+              exit 0
+            fi
+            echo "Download attempt $attempt failed; retrying"
+            sleep $((60 * attempt))
+          done
+          exit 1
+
       - name: Combine them
-        run: python scripts/impossible.py --combine impossible --out checks
+        run: python scripts/impossible.py --combine impossible --keep previous/checks/impossible_days.parquet --out checks
 
       - name: Upload to Hugging Face
         env:

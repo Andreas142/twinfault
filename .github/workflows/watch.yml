@@ -7,6 +7,12 @@ on:
         description: "How many of the most severe episodes to investigate on the raw rows"
         required: true
         default: "40"
+  # Phase 7 calls this workflow after each new month.
+  workflow_call:
+    inputs:
+      max_episodes:
+        type: string
+        required: true
 
 permissions:
   contents: read
