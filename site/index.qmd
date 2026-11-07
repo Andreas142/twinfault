@@ -18,6 +18,7 @@ pipe = sql("""
 """).iloc[0]
 tests = dbt_test_count()
 span = f"{totals.first_day:%b %Y} to {totals.last_day:%b %Y}"
+latest = f"{totals.last_day:%B %Y}"
 months = int(totals.months)
 blocks_note = "Ethereum blocks, none missing or duplicated" if pipe.gaps == 0 else "Ethereum blocks checked for gaps"
 tests_value = str(tests) if tests else "dbt"
@@ -158,6 +159,7 @@ print(f'<div class="flow column-page">{cells}</div>')
 - **Extract:** DuckDB reads the AWS public Parquet files straight from S3 on free GitHub runners, a month per job and four months at a time. Each month must pass seven checks before upload.
 - **Model:** dbt on DuckDB builds staging tables and three daily marts for each month. A month is published only if every test passes, including a reconciliation that the daily cube adds up to the raw transfers.
 - **Publish:** Quarto rebuilds this site from the marts and GitHub Pages hosts it. Every number on it is computed from the published data at build time. There is no server and no subscription.
+- **Every month:** once the source has the whole of last month, the same steps run for it on their own: extract and checks, dbt, the every-row rules and the investigation of every unusual day. The site rebuilds, and a report of the month opens as a GitHub issue.
 
 ## Status
 
@@ -169,5 +171,5 @@ print(f'<div class="flow column-page">{cells}</div>')
 - [Done]{.badge-done} Every unusual day found and checked automatically, and scored against the hand investigations
 - [Done]{.badge-done} 16 rules Ethereum makes impossible to break, checked on every row: no row breaks any
 - [Done]{.badge-done} `{python} source_line`
-- [Next]{.badge-next} Run the checks automatically after each new month is loaded
+- [Done]{.badge-done} Each new month loaded and checked on its own, with a report of what it found (latest: `{python} latest`)
 :::
