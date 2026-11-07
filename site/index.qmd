@@ -128,6 +128,7 @@ Telling cases like this apart, before anyone explains them, is what twinfault te
 
 ```{=html}
 <div class="card-grid">
+  <a class="tile" href="case-study.html"><h4>Case study</h4><p>What it does, what it found and how it is built, in three minutes.</p></a>
   <a class="tile" href="payments.html"><h4>Payments</h4><p>Daily transfers and value by token, transfer size and route.</p></a>
   <a class="tile" href="failures.html"><h4>Failures &amp; fees</h4><p>The on-chain approval rate: failed calls, fees and the unusual days.</p></a>
   <a class="tile" href="data-health.html"><h4>Data health</h4><p>Block gaps, duplicates and load delays, checked before any explanation.</p></a>

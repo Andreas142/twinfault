@@ -1,0 +1,183 @@
+---
+title: "Case study"
+subtitle: "What twinfault does, what it found in real payments data, and how it is built. A three-minute read."
+---
+
+```{python}
+#| include: false
+import pandas as pd
+from IPython.display import HTML
+from twinfault_site import *
+
+
+def day(ts) -> str:
+    return pd.Timestamp(ts).strftime("%d %b %Y").lstrip("0")
+
+
+def pct(x: float, digits: int = 1) -> str:
+    return f"{x:.{digits}f}%"
+
+
+# The data
+totals = sql("""
+    select sum(transfers) as transfers, min(date) as first_day, max(date) as last_day,
+           count(distinct date) as days, count(distinct month) as months
+    from fct_daily_payments
+""").iloc[0]
+tests = dbt_test_count()
+
+# Every unusual day
+eps = watch("episodes")
+done = eps[eps.investigated]
+agree = watch_agreement()
+agreed = sum(a["agrees"] for a in agree)
+families = done.family.value_counts()
+broken_rows = int(families.get("pipeline", 0))
+
+# The newest month's most severe episode
+newest = done[done.peak_date >= pd.Timestamp(totals.last_day).replace(day=1)]
+top = newest.sort_values("severity", ascending=False).iloc[0] if len(newest) else None
+
+# Every row, and the source itself
+rules = impossible_summary()
+rows_checked = int(rules.groupby("tbl").rows_checked.max().sum()) if len(rules) else 0
+rows_broken = int(rules.violations.sum()) if len(rules) else 0
+src = source_status()
+
+# Case 4: days the source rewrote
+rw = inv("rewrite_days")
+rw_t = rw[rw.source_table == "token_transfers"]
+rw_flag = rw_t[rw_t.pattern != "normal"]
+whole = rw_flag[rw_flag.pattern == "whole day written late"]
+patched = rw_flag[rw_flag.pattern == "written on time, then patched"]
+
+# Case 3: the decimals bug that wasn't
+known = value_outliers().dropna(subset=["reason"])
+twin = known.iloc[0] if len(known) else None
+
+# Case 1: the failure spike that wasn't customers
+spikes = inv("failures_nov_2025_spike_days")
+peak = spikes.loc[spikes.failure_rate.idxmax()]
+peak_rows = spikes[spikes.date == peak.date].set_index("token")
+sig = inv("failures_nov_2025_signature")
+sig = sig[(sig.token == "USDT") & (sig.date == peak.date)]
+sig = sig.iloc[0] if len(sig) else None
+```
+
+## The question
+
+When a payments metric suddenly moves, the first question is whether customers changed or the data did. A late file, a double load or a unit bug can look exactly like a real surge or drop, and the answer decides who gets called: the data team or the business.
+
+**twinfault** answers that question on real data, not a demo set: every USDT, USDC and PYUSD transfer on Ethereum since January 2024. The data is public, so anyone can check every claim on this page, and it is messy in the ways production data is: files arrive late, days get rewritten, bots flood the network.
+
+::: {.stat-grid}
+::: {.stat}
+[`{python} compact(totals.transfers)`]{.num}
+
+[stablecoin transfers, reconciled day by day]{.lbl}
+:::
+
+::: {.stat}
+[`{python} f"{int(totals.months)}"`]{.num}
+
+[`{python} f"months, {totals.first_day:%b %Y} to {totals.last_day:%b %Y}, one more each month"`]{.lbl}
+:::
+
+::: {.stat}
+[`{python} f"{len(done):,}"`]{.num}
+
+[episodes of unusual days found and explained, without being told a date]{.lbl}
+:::
+
+::: {.stat}
+[€0]{.num}
+
+[a month to run, with no server]{.lbl}
+:::
+:::
+
+## What it does
+
+Five layers, in the order an analyst should follow before explaining a number:
+
+1. **Check before loading.** Each month must pass seven checks: every day present, no duplicate transfers, no missing amounts or addresses, every transfer's transaction and block present, no block gaps. A new month that fails one is not published.
+2. **Model and reconcile.** dbt builds three daily marts: payments, token health and pipeline health. `{python} tests or "Its"` tests run on every month, including a reconciliation that the marts add up to the raw transfers exactly.
+3. **Check what cannot happen.** Ethereum makes some rows impossible, such as a transfer inside a failed transaction or a block whose parent is not the block before it. 16 such rules run on all `{python} f"{rows_checked:,}"` rows. `{python} "None breaks any rule." if rows_broken == 0 else f"{rows_broken:,} rows break one."`
+4. **Explain every unusual day.** Without being told a date, it scores every token and day against the same weekday in the previous eight weeks and finds `{python} f"{len(eps):,}"` episodes where transfers, value moved or the failure rate left their usual range. For each one it reads the raw rows: first the pipeline, then whether one group explains the move. Four cases were worked out by hand and kept away from the rules; the rules reach the same kind of verdict on `{python} f"{agreed} of {len(agree)}"`.
+5. **Watch the source itself.** The source is measured every day, and every published day again every week, the same way it was measured when loaded. `{python} f"{src['compared_table_days']:,} table-days compared; " + ("none has changed since it was loaded." if src['republished_table_days'] == 0 else f"{src['republished_days']:,} days have changed since they were loaded.") if src else "Results appear after the first weekly check."`
+
+Every new month loads on its own once the source has all of it, goes through all five layers, rebuilds this site, and opens a report of the month as a GitHub issue.
+
+## What it found
+
+```{python}
+#| output: asis
+worst = whole.last_written_hours_after_day.max() / 24 if len(whole) else 0
+print(f"""**The source rewrites its own past.** {len(rw_flag):,} of {len(rw_t):,} days were written or rewritten
+long after the day: {len(whole):,} were delivered whole days late, the worst {worst:,.0f} days late, and
+{len(patched):,} were loaded on time and patched afterwards. A dashboard built when those days first arrived showed
+numbers that later changed, with no error anywhere. [The evidence](investigations.html#rewrites).
+""")
+if twin is not None:
+    print(f"""
+**A decimals bug that wasn't.** On {day(twin.date)}, {twin.token} value moved was {compact(twin.volume, '$')},
+{compact(twin.times_usual)} times a median day. On a dashboard that is exactly what a unit bug looks like. The rows
+showed a real mint and burn instead: {twin.reason[0].lower()}{twin.reason[1:]}. The data was right.
+[The evidence](investigations.html#pyusd-mint).
+""")
+usdc = peak_rows.loc["USDC"] if "USDC" in peak_rows.index else peak
+one_program = (f" {sig.senders_with_fingerprint:,.0f} different addresses sent one USDT call each, every one with "
+               f"exactly {sig.fingerprint_gas:,} gas: one program, not thousands of customers. Without those calls, "
+               f"USDT's failure rate that day was {pct(sig.pct_failed_without_fingerprint, 2)}." if sig is not None else "")
+print(f"""
+**A failure spike that wasn't customers.** On {day(peak.date)}, {pct(100 * usdc.failure_rate)} of direct USDC calls
+failed against a usual {pct(100 * usdc.usual_rate, 2)}: the approval-rate drop that gets escalated.{one_program}
+Regular senders were back to normal the next day. [The evidence](investigations.html#nov-2025).
+""")
+if top is not None:
+    first_fact = (top.evidence or "").split(" | ")[0]
+    what = {"volume": "value moved", "transfers": "number of transfers", "failure_rate": "failure rate"}[top.metric]
+    print(f"""
+**And the newest month, with nobody looking.** On {day(top.peak_date)}, {top.token}'s {what} was far from
+usual. The monthly load found it, checked it on the raw rows and gave its verdict, *{top.label.lower()}*: {first_fact}
+[Every unusual day](watch.html).
+""")
+```
+
+**Most unusual days have a small, specific cause.** Of the `{python} f"{len(done):,}"` episodes checked on the raw rows:
+
+```{python}
+rows = [(family_pill(f), f"{n:,}", FAMILIES.get(f, (f, "", ""))[2]) for f, n in families.items()]
+HTML(html_table(pd.DataFrame(rows, columns=["Verdict", "Episodes", "What it means"]), numeric=("Episodes",)))
+```
+
+```{python}
+#| output: asis
+doubt = int(families.get("doubt", 0))
+doubt_note = (f" ({doubt} {'episode falls' if doubt == 1 else 'episodes fall'} on such a day and {'is' if doubt == 1 else 'are'} "
+              "marked *Data in doubt*)") if doubt else ""
+if broken_rows == 0:
+    print(f"None of them was caused by broken rows. This source's weakness is timing, the days it rewrote{doubt_note}, "
+          "not content: its rows obey every rule.")
+else:
+    print(f"{broken_rows} of them came from broken rows: the pipeline, not the business.")
+```
+
+## How it is built
+
+- **No server, €0 a month.** DuckDB reads the public AWS Parquet files straight from S3 on free GitHub Actions runners. The data lives in a public Hugging Face dataset; this site is rebuilt from it on GitHub Pages.
+- **dbt on DuckDB** builds the staging models and the three daily marts, month by month, with tests, source freshness and [documentation](dbt/index.html).
+- **One definition per step.** The extract, dbt, every-row and investigation workflows are reusable: the backfill ran them for 33 months, and the monthly load calls the same ones for one month.
+- **Rules, not a model.** Every verdict comes from plain Python rules in [`twinfault/verdicts.py`](https://github.com/Andreas142/twinfault/blob/main/twinfault/verdicts.py), so each one can be traced to the check that produced it.
+- **Fail loudly.** A month that fails a check is not published; a source day that arrives late, changes or no longer matches what was loaded opens a GitHub issue.
+
+## Limits
+
+- **One source.** Everything comes from the AWS export. A second source, such as an Ethereum node, would catch errors the two do not share.
+- **Addresses, not people.** The data shows which addresses acted, not who is behind them. "Bots" means a pattern, such as one gas fingerprint or a fleet of new addresses, not a confirmed identity.
+- **Rules tuned on this data.** A new kind of event may land in *Broad real change*. The page then says so rather than inventing a reason.
+- **Direct calls only.** The failure rate covers calls made straight to the token contracts; a failure inside another contract leaves no trace in these tables.
+
+## See for yourself
+
+[Code on GitHub](https://github.com/Andreas142/twinfault) · [Dataset on Hugging Face](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth) · [Every unusual day](watch.html) · [Investigations](investigations.html) · [Data health](data-health.html) · [dbt docs](dbt/index.html)
