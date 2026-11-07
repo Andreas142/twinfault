@@ -5,6 +5,8 @@ subtitle: "What twinfault does, what it found in real payments data, and how it 
 
 ```{python}
 #| include: false
+import math
+
 import pandas as pd
 from IPython.display import HTML
 from twinfault_site import *
@@ -34,9 +36,10 @@ agreed = sum(a["agrees"] for a in agree)
 families = done.family.value_counts()
 broken_rows = int(families.get("pipeline", 0))
 
-# The newest month's most severe episode
-newest = done[done.peak_date >= pd.Timestamp(totals.last_day).replace(day=1)]
-top = newest.sort_values("severity", ascending=False).iloc[0] if len(newest) else None
+# The newest month's biggest move: the episode furthest from usual, as a ratio either way
+newest = done[done.peak_date >= pd.Timestamp(totals.last_day).replace(day=1)].copy()
+newest["size"] = newest.peak_ratio.map(lambda r: abs(math.log(r)) if r > 0 else 0)
+top = newest.sort_values("size", ascending=False).iloc[0] if len(newest) else None
 
 # Every row, and the source itself
 rules = impossible_summary()
@@ -122,7 +125,7 @@ if twin is not None:
     print(f"""
 **A decimals bug that wasn't.** On {day(twin.date)}, {twin.token} value moved was {compact(twin.volume, '$')},
 {compact(twin.times_usual)} times a median day. On a dashboard that is exactly what a unit bug looks like. The rows
-showed a real mint and burn instead: {twin.reason[0].lower()}{twin.reason[1:]}. The data was right.
+showed a real mint and burn instead: {twin.reason}. The data was right.
 [The evidence](investigations.html#pyusd-mint).
 """)
 usdc = peak_rows.loc["USDC"] if "USDC" in peak_rows.index else peak
