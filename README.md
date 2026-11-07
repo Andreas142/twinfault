@@ -2,7 +2,7 @@
 
 **Is it the business, or the pipeline?** When a payments metric suddenly moves, the first question is whether customers changed or the data did. twinfault answers it on real data: every USDT, USDC and PYUSD transfer on Ethereum since January 2024. A 33-month backfill covers January 2024 to September 2026; since then each month loads and is checked on its own once it ends.
 
-**[Live site](https://andreas142.github.io/twinfault/)** · **[Every unusual day](https://andreas142.github.io/twinfault/watch)** · **[Investigations](https://andreas142.github.io/twinfault/investigations)** · **[Dataset on Hugging Face](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth)** · **[dbt docs](https://andreas142.github.io/twinfault/dbt/)**
+**[Live site](https://andreas142.github.io/twinfault/)** · **[Case study](https://andreas142.github.io/twinfault/case-study)** · **[Every unusual day](https://andreas142.github.io/twinfault/watch)** · **[Investigations](https://andreas142.github.io/twinfault/investigations)** · **[Dataset on Hugging Face](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth)** · **[dbt docs](https://andreas142.github.io/twinfault/dbt/)**
 
 | 733M | 7.18M | 1,004 | 21 | €0 |
 |:---:|:---:|:---:|:---:|:---:|
