@@ -1,12 +1,14 @@
 # twinfault
 
-**Is it the business, or the pipeline?** When a payments metric suddenly moves, the first question is whether customers changed or the data did. twinfault answers it on real data: every USDT, USDC and PYUSD transfer on Ethereum from January 2024 to September 2026.
+**Is it the business, or the pipeline?** When a payments metric suddenly moves, the first question is whether customers changed or the data did. twinfault answers it on real data: every USDT, USDC and PYUSD transfer on Ethereum since January 2024. A 33-month backfill covers January 2024 to September 2026; since then each month loads and is checked on its own once it ends.
 
 **[Live site](https://andreas142.github.io/twinfault/)** · **[Every unusual day](https://andreas142.github.io/twinfault/watch)** · **[Investigations](https://andreas142.github.io/twinfault/investigations)** · **[Dataset on Hugging Face](https://huggingface.co/datasets/andrew142/stablecoin-payments-eth)** · **[dbt docs](https://andreas142.github.io/twinfault/dbt/)**
 
 | 733M | 7.18M | 1,004 | 21 | €0 |
 |:---:|:---:|:---:|:---:|:---:|
 | stablecoin transfers, reconciled day by day | Ethereum blocks, none missing or duplicated | days, Jan 2024 to Sep 2026 | dbt tests passed by every month | a month to run |
+
+The figures here are from the backfill; the [live site](https://andreas142.github.io/twinfault/) counts every month loaded since.
 
 ## What the data showed
 
@@ -41,9 +43,20 @@ Some rows cannot exist on Ethereum: a transfer inside a failed transaction, a tr
 A warehouse loads a day once and assumes it never changes. This source delivered 44 days late, the worst by 397 days, and patched 17 more after publishing them. So `scripts/snapshot_source.py` measures the AWS source the same way the load log did (rows, files, block range, first and last write time), keeps every measurement, and compares:
 
 - **Every morning**, the last 14 days: a day missing 48 hours after it ended is *late*; a day that differs from yesterday's measurement has *changed*.
-- **Every Sunday**, all 1,004 published days again: a day that no longer matches what was loaded has been *republished*, so the numbers built on it may be out of date.
+- **Every Sunday**, every published day again: a day that no longer matches what was loaded has been *republished*, so the numbers built on it may be out of date.
 
 Anything new opens a GitHub issue, and the Data health page is rebuilt after every snapshot. **First full re-check (31 Oct 2026): all 3,012 table-days match what was loaded, so AWS has changed nothing since.** It also found the 44 late days again on its own: 132 table-days (44 days × 3 tables) were first written more than 48 hours after their day ended. A day usually reaches the source within minutes of midnight UTC.
+
+## Each new month, on its own
+
+`Phase 7 - load each new month` runs on the 3rd of every month. It loads last month only if every day of it is in all three source tables, at least 48 hours after the month ended, and the month is not loaded yet. Then it runs the same workflows as the backfill, for that one month:
+
+1. Extract and the seven checks. With the monthly load, a month that fails a check is not published.
+2. dbt build and tests, then the source freshness check.
+3. The 16 every-row rules, kept together with the earlier months' results.
+4. The investigation of every unusual day, including the new month's.
+
+The website rebuilds, and a report of the month opens as a GitHub issue: what loaded, which tests passed, every unusual day in the month with its verdict, and any day the pipeline flags. If the source is still missing days, the load tries again every day until the 10th, then opens an issue saying the month is overdue.
 
 ## The look-alike pairs
 
@@ -78,6 +91,7 @@ flowchart LR
 - **Model** (`analytics/`): dbt on DuckDB builds staging models and three daily marts per month: payments by token, amount band and route; token health (direct calls, failures, fees); and pipeline health (block gaps, duplicates, load delay). A month is published only if every test passes, including a reconciliation that the daily cube adds up to the raw transfers exactly.
 - **Investigate** (`scripts/investigate.py`): downloads only the days involved and runs the checks behind the Investigations page. Every result table is published under `investigations/` in the dataset.
 - **Watch** (`scripts/watch.py`, `twinfault/`): finds every unusual day in the marts, checks the most severe on the raw rows, and records a verdict with its evidence. The rules are plain Python in `twinfault/verdicts.py`, so every verdict can be traced to the check that produced it. Results are published under `watch/`.
+- **Monthly** (`scripts/monthly.py`, `.github/workflows/monthly.yml`): decides whether last month is complete and not loaded yet, calls the backfill, dbt, every-row and watch workflows for that month (each is also a reusable workflow), and writes the month's report.
 - **Snapshot** (`scripts/snapshot_source.py`): measures the AWS source every day and every published day each Sunday, and records what arrived late, changed or no longer matches the load. Results are published under `loads/`.
 - **Publish** (`site/`): Quarto rebuilds the site from the marts and the investigation tables, and GitHub Pages hosts it. Every number on the site is computed from the published data at build time.
 
@@ -94,13 +108,14 @@ There is no server, no database to host and no subscription. Every step is a Git
 | Phase 4 - investigate every unusual day | Finds and checks every unusual day automatically and uploads the verdicts |
 | Phase 5 - check what cannot happen | Checks 16 rules Ethereum makes impossible to break on every row, month by month |
 | Phase 6 - snapshot the source every day | Measures the last 14 days of the source every morning and every published day on Sundays; opens an issue if a day is late, changed or no longer matches the load |
+| Phase 7 - load each new month | On the 3rd of each month, loads and checks last month once it is complete, then opens a report of the month as an issue |
 
 ## Repository layout
 
 ```
-.github/workflows/   the nine workflows above
+.github/workflows/   the ten workflows above
 twinfault/           episode detection, checks on the raw rows, and the verdict rules
-scripts/             extract, backfill helpers, AWS probe, investigations, watch, every-row rules, source snapshots
+scripts/             extract, backfill helpers, AWS probe, investigations, watch, every-row rules, source snapshots, monthly load
 analytics/           dbt project: staging models, marts, tests, docs overview
 site/                Quarto website: one .qmd per page, shared helpers in twinfault_site.py
 ```
@@ -127,7 +142,7 @@ The [dataset card](https://huggingface.co/datasets/andrew142/stablecoin-payments
 - [x] Every unusual day found and checked automatically, and scored against the hand investigations
 - [x] 16 rules Ethereum makes impossible to break, checked on every row: no row breaks any
 - [x] The AWS source snapshotted every day and every published day measured again weekly: none had changed at the first full re-check
-- [ ] Run the checks automatically after each new month is loaded
+- [x] Each new month loaded and checked on its own, with a report of the month opened as an issue
 
 ## Data and licence
 
