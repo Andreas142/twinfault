@@ -69,9 +69,20 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            site/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r ../requirements.txt
+        # Packages come from the cache when possible; a failed download is retried.
+        run: |
+          for attempt in 1 2 3; do
+            if pip install --retries 10 --timeout 60 -r ../requirements.txt; then exit 0; fi
+            echo "pip install failed (attempt $attempt); retrying"
+            sleep $((30 * attempt))
+          done
+          exit 1
 
       # Download only this month's files: one listing call instead of one per folder,
       # which keeps parallel jobs under Hugging Face's request limits.
@@ -139,9 +150,20 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            site/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r ../requirements.txt
+        # Packages come from the cache when possible; a failed download is retried.
+        run: |
+          for attempt in 1 2 3; do
+            if pip install --retries 10 --timeout 60 -r ../requirements.txt; then exit 0; fi
+            echo "pip install failed (attempt $attempt); retrying"
+            sleep $((30 * attempt))
+          done
+          exit 1
 
       # Freshness is about the newest data, whatever range this run built:
       # last calendar month's load log should already be on Hugging Face.
